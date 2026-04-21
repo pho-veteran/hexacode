@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "routes": [
+    {
+      "id": "problem-service",
+      "prefix": "/api/problems",
+      "upstream_env": "PROBLEM_SERVICE_URL"
+    },
+    {
+      "id": "problem-tags",
+      "prefix": "/api/tags",
+      "upstream_env": "PROBLEM_SERVICE_URL"
+    },
+    {
+      "id": "identity-auth",
+      "prefix": "/api/auth",
+      "upstream_env": "IDENTITY_SERVICE_URL"
+    },
+    {
+      "id": "identity-dashboard-users",
+      "prefix": "/api/dashboard/users",
+      "upstream_env": "IDENTITY_SERVICE_URL"
+    },
+    {
+      "id": "problem-dashboard",
+      "prefix": "/api/dashboard",
+      "upstream_env": "PROBLEM_SERVICE_URL"
+    },
+    {
+      "id": "submission-dashboard-operations",
+      "prefix": "/api/dashboard/operations",
+      "upstream_env": "SUBMISSION_SERVICE_URL"
+    },
+    {
+      "id": "submission-service",
+      "prefix": "/api/submissions",
+      "upstream_env": "SUBMISSION_SERVICE_URL"
+    },
+    {
+      "id": "submission-runtimes",
+      "prefix": "/api/runtimes",
+      "upstream_env": "SUBMISSION_SERVICE_URL"
+    }
+  ]
+}

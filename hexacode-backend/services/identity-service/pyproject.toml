@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hexacode-identity-service"
+version = "0.1.0"
+description = "Identity service for Hexacode platform auth and RBAC."
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115,<1.0",
+  "psycopg[binary]>=3.2,<4.0",
+  "PyJWT[crypto]>=2.9,<3.0",
+  "uvicorn[standard]>=0.30,<1.0"
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app", "app.*", "backend_common", "backend_common.*"]

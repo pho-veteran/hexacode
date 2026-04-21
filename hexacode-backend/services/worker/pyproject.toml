@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hexacode-worker"
+version = "0.1.0"
+description = "Execution-only worker scaffold for Hexacode."
+requires-python = ">=3.12"
+dependencies = [
+  "boto3>=1.35,<2.0",
+  "httpx>=0.27,<1.0"
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app", "app.*", "backend_common", "backend_common.*"]

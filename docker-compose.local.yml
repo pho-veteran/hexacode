@@ -1,0 +1,120 @@
+name: hexacode-backend
+
+services:
+  frontend:
+    build:
+      context: ./hexacode-frontend
+      dockerfile: Dockerfile
+    env_file:
+      - ./hexacode-frontend/.env
+    ports:
+      - "3000:3000"
+    depends_on:
+      - gateway
+
+  gateway:
+    build:
+      context: ./hexacode-backend
+      dockerfile: services/api-gateway/Dockerfile
+    env_file:
+      - ./hexacode-backend/.env
+    environment:
+      IDENTITY_SERVICE_URL: http://identity-service:8000
+    ports:
+      - "8080:8000"
+    depends_on:
+      - identity-service
+      - problem-service
+      - submission-service
+      - postgres
+      - minio
+      - redis
+      - elasticmq
+
+  identity-service:
+    build:
+      context: ./hexacode-backend
+      dockerfile: services/identity-service/Dockerfile
+    env_file:
+      - ./hexacode-backend/.env
+    ports:
+      - "8003:8000"
+    depends_on:
+      - postgres
+
+  problem-service:
+    build:
+      context: .
+      dockerfile: hexacode-backend/services/problem-service/Dockerfile
+    env_file:
+      - ./hexacode-backend/.env
+    volumes:
+      - ./data:/workspace/data:ro
+    ports:
+      - "8001:8000"
+    depends_on:
+      - postgres
+      - minio
+      - redis
+
+  submission-service:
+    build:
+      context: ./hexacode-backend
+      dockerfile: services/submission-service/Dockerfile
+    env_file:
+      - ./hexacode-backend/.env
+    ports:
+      - "8002:8000"
+    depends_on:
+      - postgres
+      - minio
+      - redis
+      - elasticmq
+
+  worker:
+    build:
+      context: ./hexacode-backend
+      dockerfile: services/worker/Dockerfile
+    env_file:
+      - ./hexacode-backend/.env
+    depends_on:
+      - submission-service
+      - elasticmq
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: hexacode
+      POSTGRES_USER: hexacode
+      POSTGRES_PASSWORD: hexacode
+    ports:
+      - "15432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "19000:9000"
+      - "19001:9001"
+    volumes:
+      - minio-data:/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "16379:6379"
+
+  elasticmq:
+    image: softwaremill/elasticmq-native:latest
+    ports:
+      - "19324:9324"
+      - "19325:9325"
+
+volumes:
+  postgres-data:
+  minio-data:

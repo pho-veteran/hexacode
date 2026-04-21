@@ -1,0 +1,182 @@
+{
+  "tags": [
+    {
+      "slug": "arrays",
+      "name": "Arrays",
+      "description": "Contiguous data, scans, and position-based reasoning.",
+      "color": "#0f766e",
+      "icon": "rows3"
+    },
+    {
+      "slug": "prefix-sums",
+      "name": "Prefix Sums",
+      "description": "Aggregate ranges and split points with running totals.",
+      "color": "#2563eb",
+      "icon": "chart-column"
+    },
+    {
+      "slug": "implementation",
+      "name": "Implementation",
+      "description": "Direct simulation with careful case handling.",
+      "color": "#7c3aed",
+      "icon": "wrench"
+    },
+    {
+      "slug": "graphs",
+      "name": "Graphs",
+      "description": "Nodes, edges, connectivity, and path-finding.",
+      "color": "#1d4ed8",
+      "icon": "network"
+    },
+    {
+      "slug": "bfs",
+      "name": "BFS",
+      "description": "Layered shortest paths on unweighted graphs.",
+      "color": "#0891b2",
+      "icon": "git-branch"
+    },
+    {
+      "slug": "greedy",
+      "name": "Greedy",
+      "description": "Build a valid optimum through locally best choices.",
+      "color": "#ea580c",
+      "icon": "move-right"
+    },
+    {
+      "slug": "sorting",
+      "name": "Sorting",
+      "description": "Reorder input to reveal structure.",
+      "color": "#b45309",
+      "icon": "arrow-up-down"
+    },
+    {
+      "slug": "binary-search",
+      "name": "Binary Search",
+      "description": "Search on answer using a monotonic feasibility check.",
+      "color": "#dc2626",
+      "icon": "search"
+    }
+  ],
+  "problems": [
+    {
+      "slug": "bookstore-balance",
+      "title": "Bookstore Balance",
+      "summary_md": "Split a day of sales into two consecutive parts with the smallest possible difference.",
+      "difficulty_code": "easy",
+      "type_code": "traditional",
+      "visibility_code": "public",
+      "status_code": "published",
+      "scoring_code": "icpc",
+      "time_limit_ms": 1000,
+      "memory_limit_kb": 262144,
+      "output_limit_kb": 65536,
+      "tag_slugs": ["arrays", "prefix-sums", "implementation"],
+      "statement_path": "bookstore-balance/statement.md",
+      "testcases_dir": "bookstore-balance/testcases",
+      "testset_type_code": "primary",
+      "testset_title": "Official tests",
+      "testset_note": "Covers short arrays, equal splits, and uneven totals.",
+      "sample_cases": [
+        {
+          "ordinal": 1,
+          "note": "Balanced split appears in the middle of the array."
+        },
+        {
+          "ordinal": 2,
+          "note": "All sale counts are equal, so every split is symmetric."
+        }
+      ],
+      "checker_type_code": "diff"
+    },
+    {
+      "slug": "delivery-network",
+      "title": "Delivery Network",
+      "summary_md": "Find the fewest roads needed to move a package between two depots in an unweighted network.",
+      "difficulty_code": "medium",
+      "type_code": "traditional",
+      "visibility_code": "public",
+      "status_code": "published",
+      "scoring_code": "icpc",
+      "time_limit_ms": 1000,
+      "memory_limit_kb": 262144,
+      "output_limit_kb": 65536,
+      "tag_slugs": ["graphs", "bfs"],
+      "statement_path": "delivery-network/statement.md",
+      "testcases_dir": "delivery-network/testcases",
+      "testset_type_code": "primary",
+      "testset_title": "Official tests",
+      "testset_note": "Connected, disconnected, and trivial one-node cases.",
+      "sample_cases": [
+        {
+          "ordinal": 1,
+          "note": "A shortest path exists and uses two roads."
+        },
+        {
+          "ordinal": 2,
+          "note": "The destination depot is disconnected from the start."
+        }
+      ],
+      "checker_type_code": "diff"
+    },
+    {
+      "slug": "meeting-room-schedule",
+      "title": "Meeting Room Schedule",
+      "summary_md": "Accept the largest number of non-overlapping meetings in a single room.",
+      "difficulty_code": "easy",
+      "type_code": "traditional",
+      "visibility_code": "public",
+      "status_code": "published",
+      "scoring_code": "icpc",
+      "time_limit_ms": 1000,
+      "memory_limit_kb": 262144,
+      "output_limit_kb": 65536,
+      "tag_slugs": ["greedy", "sorting"],
+      "statement_path": "meeting-room-schedule/statement.md",
+      "testcases_dir": "meeting-room-schedule/testcases",
+      "testset_type_code": "primary",
+      "testset_title": "Official tests",
+      "testset_note": "Includes ties, chained meetings, and dominant long intervals.",
+      "sample_cases": [
+        {
+          "ordinal": 1,
+          "note": "Choosing short meetings beats one long overlapping interval."
+        },
+        {
+          "ordinal": 2,
+          "note": "Every meeting can be accepted in a clean chain."
+        }
+      ],
+      "checker_type_code": "diff"
+    },
+    {
+      "slug": "router-placement",
+      "title": "Router Placement",
+      "summary_md": "Place a fixed number of routers so the minimum distance between any two routers is as large as possible.",
+      "difficulty_code": "medium",
+      "type_code": "traditional",
+      "visibility_code": "public",
+      "status_code": "published",
+      "scoring_code": "icpc",
+      "time_limit_ms": 1000,
+      "memory_limit_kb": 262144,
+      "output_limit_kb": 65536,
+      "tag_slugs": ["binary-search", "greedy", "sorting"],
+      "statement_path": "router-placement/statement.md",
+      "testcases_dir": "router-placement/testcases",
+      "testset_type_code": "primary",
+      "testset_title": "Official tests",
+      "testset_note": "Varied spacing patterns for monotonic feasibility checks.",
+      "sample_cases": [
+        {
+          "ordinal": 1,
+          "note": "Classic sample where three routers fit with distance three."
+        },
+        {
+          "ordinal": 2,
+          "note": "With two routers, the answer is the distance between the farthest houses."
+        }
+      ],
+      "checker_type_code": "diff"
+    }
+  ]
+}
