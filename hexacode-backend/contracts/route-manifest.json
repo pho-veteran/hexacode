@@ -7,6 +7,13 @@
       "upstream_env": "PROBLEM_SERVICE_URL"
     },
     {
+      "id": "problem-chat",
+      "prefix": "/api/chat",
+      "lambda_function_env": "CHAT_LAMBDA_FUNCTION_NAME",
+      "timeout_env": "CHAT_LAMBDA_TIMEOUT_SECONDS",
+      "lambda_qualifier_env": "CHAT_LAMBDA_QUALIFIER"
+    },
+    {
       "id": "problem-tags",
       "prefix": "/api/tags",
       "upstream_env": "PROBLEM_SERVICE_URL"

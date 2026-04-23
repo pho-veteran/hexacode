@@ -1,4 +1,5 @@
 import { Outlet } from "react-router-dom";
+import { ChatWidget } from "@/components/chat/ChatWidget";
 import { PublicNav } from "./PublicNav";
 import { GradientCanvas, GrainOverlay } from "./Ambient";
 import { SessionExpiringBanner } from "./SessionExpiringBanner";
@@ -30,6 +31,7 @@ export function PublicShell() {
             </div>
           </div>
         </footer>
+        <ChatWidget area="public" />
       </div>
     </div>
   );

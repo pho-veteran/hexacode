@@ -7,6 +7,7 @@ This document keeps only the target cloud shape for Hexacode. It is intentionall
 - Frontend: static build served through CDN/object storage
 - Public API entrypoint: AWS API Gateway
 - Auth: AWS Cognito
+- Chat inference: AWS Lambda calling Amazon Bedrock
 - Services: containerized FastAPI services
 - Database: PostgreSQL
 - Object storage: S3
@@ -25,6 +26,8 @@ This document keeps only the target cloud shape for Hexacode. It is intentionall
 - `submission-service`
   - submissions
   - judge jobs and results
+
+For chat, local development may simulate API Gateway by invoking Lambda directly, while cloud deployment should use the real public AWS API Gateway -> Lambda/Bedrock route.
 - `worker`
   - asynchronous judge execution only
 

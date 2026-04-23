@@ -17,8 +17,10 @@ Hexacode is an online coding judge platform with:
   - public app
   - dashboard
   - problem solving workspace
+  - global Bedrock-backed chat widget
 - `hexacode-backend/services/api-gateway`
   - public backend entrypoint
+  - `/api/chat/*` local API Gateway simulation via direct Lambda invoke
 - `hexacode-backend/services/identity-service`
   - `/api/auth/me`
   - user status
@@ -35,6 +37,8 @@ Hexacode is an online coding judge platform with:
   - results
 - `hexacode-backend/services/worker`
   - queue consumer for judge execution
+- `hexacode-backend/services/chat-lambda`
+  - AWS Lambda handler for Bedrock-backed chat
 
 ## Local Infrastructure
 
@@ -70,9 +74,10 @@ The schema source of truth is `hexacode-backend/db/new-app-schema.sql`.
 
 1. Frontend calls the gateway.
 2. Gateway routes to the correct backend service.
-3. Services read/write PostgreSQL and object storage as needed.
-4. Submission-service enqueues judge jobs.
-5. Worker consumes queue messages and posts results back to submission-service.
+3. The local gateway simulates AWS API Gateway for chat by invoking the Lambda function directly with an API Gateway-shaped event.
+4. Services read/write PostgreSQL and object storage as needed.
+5. Submission-service enqueues judge jobs.
+6. Worker consumes queue messages and posts results back to submission-service.
 
 ## Problem Data Flow
 

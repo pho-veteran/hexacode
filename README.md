@@ -72,6 +72,9 @@ Local service ports from Compose:
   - catalog import target for `data/problems`
 - `submission-service`
   - runtime profiles, submission creation, judge job dispatch, results, and submission history
+- `chat-lambda`
+  - AWS Lambda handler for Bedrock-backed chat
+  - intended to sit behind API Gateway in cloud
 - `worker`
   - consumes queued judge jobs
   - compiles code and executes sample runs or full submissions

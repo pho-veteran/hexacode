@@ -1,6 +1,8 @@
 import { apiDelete, apiGet, apiMultipart, apiPost, apiPut, buildApiUrl } from "./client";
 import type {
   AuthMe,
+  ChatRequest,
+  ChatResponse,
   DashboardOperations,
   DashboardProblemDetail,
   DashboardProblemSummary,
@@ -52,6 +54,8 @@ export const getProblemSolve = (slug: string) => apiGet<ProblemSolveDetail>(`/ap
 export const getTags = () => apiGet<ProblemTag[]>(`/api/tags`);
 export const getRuntimes = () => apiGet<RuntimeProfile[]>(`/api/runtimes`);
 export const getCurrentActor = () => apiGet<AuthMe>(`/api/auth/me`);
+export const postChatMessages = (payload: ChatRequest) =>
+  apiPost<ChatResponse>(`/api/chat/messages`, payload);
 
 export function getPublicProblemFileUrl(slug: string, objectId: string) {
   return buildApiUrl(`/api/problems/${slug}/files/${objectId}`);

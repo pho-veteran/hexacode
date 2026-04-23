@@ -11,6 +11,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { useState } from "react";
+import { ChatWidget } from "@/components/chat/ChatWidget";
 import { Card } from "@/components/ui/Card";
 import { Chip } from "@/components/ui/Chip";
 import { Skeleton } from "@/components/ui/Feedback";
@@ -205,6 +206,7 @@ export function DashboardShell() {
         <main className="flex-1 px-6 py-6">
           <Outlet />
         </main>
+        <ChatWidget area="dashboard" />
       </div>
     </div>
   );

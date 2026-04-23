@@ -369,6 +369,32 @@ export type StorageLifecycleCleanup = {
   remaining_estimate: number;
 };
 
+export type ChatRole = "user" | "assistant";
+
+export type ChatMessage = {
+  role: ChatRole;
+  content: string;
+};
+
+export type ChatArea = "public" | "dashboard" | "workspace";
+
+export type ChatPageContext = {
+  route: string;
+  area: ChatArea;
+  problemSlug?: string | null;
+};
+
+export type ChatRequest = {
+  sessionId: string;
+  messages: ChatMessage[];
+  pageContext?: ChatPageContext;
+};
+
+export type ChatResponse = {
+  reply: ChatMessage;
+  requestId: string;
+};
+
 export type ApiEnvelope<T> = { data: T; meta?: Record<string, unknown> };
 
 export type UploadProgress = {
