@@ -6,6 +6,7 @@ import {
   type ChatArea,
   type ChatMessage,
 } from "@/lib/api";
+import { Markdown } from "@/components/Markdown";
 import { Button } from "@/components/ui/Button";
 import { EmptyState, ErrorBanner } from "@/components/ui/Feedback";
 import { Textarea } from "@/components/ui/Input";
@@ -180,7 +181,7 @@ export function ChatWidget({ area }: { area: ChatArea }) {
     <div className="pointer-events-none fixed bottom-4 right-4 z-[60] flex max-w-[calc(100vw-1.5rem)] flex-col items-end gap-3">
       {state.open ? (
         <section className="pointer-events-auto flex max-h-[calc(100dvh-2rem)] w-[min(92vw,25rem)] flex-col overflow-hidden rounded-[24px] border border-[var(--color-border-soft)] bg-[var(--color-bg-elevated)] shadow-float">
-          <header className="relative overflow-hidden border-b border-[var(--color-border-hair)] px-4 py-4">
+          <header className="relative shrink-0 overflow-hidden border-b border-[var(--color-border-hair)] px-4 py-4">
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(253,186,116,0.45),transparent_55%),radial-gradient(circle_at_bottom_right,rgba(103,232,249,0.24),transparent_48%)]" />
             <div className="relative flex items-start justify-between gap-3">
               <div className="min-w-0">
@@ -225,15 +226,22 @@ export function ChatWidget({ area }: { area: ChatArea }) {
                   >
                     <div
                       className={cn(
-                        "max-w-[88%] rounded-[20px] px-3.5 py-3",
+                        "min-w-0 max-w-[88%] rounded-[20px] px-3.5 py-3",
                         message.role === "user"
                           ? "bg-[var(--color-accent)] text-[var(--color-accent-fg)]"
                           : "bg-[var(--color-bg-muted)] text-[var(--color-text-primary)] hairline",
                       )}
                     >
-                      <div className="whitespace-pre-wrap break-words text-[13px] leading-6 [overflow-wrap:anywhere]">
-                        {message.content}
-                      </div>
+                      {message.role === "assistant" ? (
+                        <Markdown
+                          source={message.content}
+                          className="text-[13px] leading-6 break-words [overflow-wrap:anywhere]"
+                        />
+                      ) : (
+                        <div className="whitespace-pre-wrap break-words text-[13px] leading-6 [overflow-wrap:anywhere]">
+                          {message.content}
+                        </div>
+                      )}
                     </div>
                   </article>
                 ))}
@@ -250,7 +258,7 @@ export function ChatWidget({ area }: { area: ChatArea }) {
             )}
           </div>
 
-          <div className="border-t border-[var(--color-border-hair)] px-4 py-4">
+          <div className="shrink-0 border-t border-[var(--color-border-hair)] px-4 py-4">
             {error ? (
               <ErrorBanner
                 title="Chat request failed"
