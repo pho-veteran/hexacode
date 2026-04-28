@@ -18,6 +18,7 @@ from backend_common.authz import (
     require_local_permission,
 )
 from backend_common.bootstrap import bootstrap_service
+from backend_common.cors import install_cors
 from backend_common.database import get_connection
 from backend_common.errors import install_exception_handlers
 from backend_common.identity import ensure_local_user
@@ -1377,7 +1378,10 @@ async def lifespan(_: FastAPI):
     BOOTSTRAP_SUMMARY = bootstrap_service(
         SETTINGS,
         apply_schema=True,
-        ensure_storage_buckets=True,
+        # Submission APIs can serve requests without mutating bucket state at startup.
+        # In production the submission bucket is externally managed, and auto-create
+        # attempts currently fail against the bucket namespace configuration.
+        ensure_storage_buckets=False,
         ensure_judge_queue=True,
     )
     seed_runtime_catalog()
@@ -1390,6 +1394,7 @@ app = FastAPI(
     description="Submission service with queue dispatch and worker callback contracts.",
     lifespan=lifespan,
 )
+install_cors(app)
 install_exception_handlers(app, SETTINGS.service_name)
 
 

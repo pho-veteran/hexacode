@@ -86,7 +86,7 @@ Problem content is curated in `data/problems/`.
 Import flow:
 
 1. statements and testcase assets are read from `data/problems/`
-2. `scripts/import_problem_catalog.py` imports them
+2. `hexacode-backend/scripts/import_problem_catalog.py` imports them
 3. problem metadata is written to PostgreSQL
 4. assets are uploaded to MinIO
 

@@ -7,7 +7,7 @@ Hexacode is an online coding judge platform with a React frontend, a FastAPI mic
 - `hexacode-frontend/` active frontend
 - `hexacode-backend/` backend services, shared backend code, contracts, and schema
 - `data/problems/` curated problem catalog used for fresh imports
-- `scripts/` utility scripts, including catalog import and smoke flows
+- `hexacode-backend/scripts/` backend utility scripts, including catalog import
 - `docs/plan.md` high-level app architecture
 - `docs/cloud-deployment.md` future cloud deployment shape
 
@@ -216,6 +216,54 @@ Re-import the catalog without recreating volumes:
 
 ```powershell
 docker compose -f docker-compose.local.yml exec -T problem-service python scripts/import_problem_catalog.py --catalog-dir /workspace/data/problems --skip-env-file --reset-existing
+```
+
+Grant the local `admin` role to a specific username:
+
+Replace `<username>` with the value stored in `app_identity.users.username`.
+The user must already exist locally, which normally happens after that user signs in once.
+
+```powershell
+docker compose -f docker-compose.local.yml exec -T postgres psql -U hexacode -d hexacode -c "insert into app_identity.user_role_assignments (user_id, role_code) select id, 'admin' from app_identity.users where username = '<username>' on conflict (user_id, role_code) do nothing;"
+```
+
+If you are already inside the `identity-service` container, or inside the same image running on ECS/Fargate, use Python instead of `psql`:
+
+```sh
+python - <<'PY'
+import os
+import sys
+import psycopg
+
+username = "<username>"
+
+with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+    with conn.cursor() as cur:
+        cur.execute(
+            "select id from app_identity.users where username = %s",
+            (username,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            sys.exit(f"user not found: {username}")
+
+        cur.execute(
+            """
+            insert into app_identity.user_role_assignments (user_id, role_code)
+            values (%s, 'admin')
+            on conflict (user_id, role_code) do nothing
+            """,
+            (row[0],),
+        )
+        conn.commit()
+        print("granted admin role" if cur.rowcount else "admin role already present")
+PY
+```
+
+Check which roles a local username currently has:
+
+```powershell
+docker compose -f docker-compose.local.yml exec -T postgres psql -U hexacode -d hexacode -c "select u.username, coalesce(array_agg(a.role_code order by a.role_code) filter (where a.role_code is not null), '{}') as roles from app_identity.users u left join app_identity.user_role_assignments a on a.user_id = u.id where u.username = '<username>' group by u.username;"
 ```
 
 Open the MinIO console:

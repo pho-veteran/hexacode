@@ -35,6 +35,7 @@ import { Tabs, TabContent } from "@/components/ui/Tabs";
 import { Markdown } from "@/components/Markdown";
 import { Skeleton, ErrorBanner, EmptyState } from "@/components/ui/Feedback";
 import { Select } from "@/components/ui/Input";
+import { AuthRequired } from "@/components/shell";
 import { useAuth } from "@/lib/auth";
 import {
   createCustomTestcase,
@@ -107,9 +108,13 @@ export function ProblemSolveRoute() {
   const problemQ = useQuery({
     queryKey: ["problem-solve", slug],
     queryFn: () => getProblemSolve(slug),
-    enabled: !!slug,
+    enabled: auth.status === "authenticated" && !!slug,
   });
-  const runtimesQ = useQuery({ queryKey: ["runtimes"], queryFn: getRuntimes });
+  const runtimesQ = useQuery({
+    queryKey: ["runtimes"],
+    queryFn: getRuntimes,
+    enabled: auth.status === "authenticated",
+  });
 
   const problem = problemQ.data;
   const runtimes = runtimesQ.data ?? [];
@@ -336,7 +341,19 @@ export function ProblemSolveRoute() {
     [auth.accessToken, update],
   );
 
-  if (problemQ.isLoading || runtimesQ.isLoading) return <WorkspaceSkeleton />;
+  if (auth.status === "loading" || problemQ.isLoading || runtimesQ.isLoading) {
+    return <WorkspaceSkeleton />;
+  }
+  if (auth.status !== "authenticated") {
+    return (
+      <div className="p-6">
+        <AuthRequired
+          title="Sign in to solve"
+          description="The solve workspace stores code and creates submissions under your account."
+        />
+      </div>
+    );
+  }
   if (problemQ.isError) {
     return (
       <div className="p-6">
@@ -441,9 +458,7 @@ function WorkspaceTopBar(props: {
   return (
     <header className="h-14 grid grid-cols-[1fr_auto_1fr] items-center px-4 border-b border-[var(--color-border-hair)] bg-[var(--color-bg-base)] flex-none gap-3">
       <div className="flex items-center gap-3 min-w-0">
-        <Link to="/" className="flex items-center" aria-label="Hexacode home">
-          <Brand size="sm" />
-        </Link>
+        <Brand size="sm" to="/" className="flex items-center" />
         <span className="h-4 w-px bg-[var(--color-border-hair)]" />
         <Link
           to="/problems"

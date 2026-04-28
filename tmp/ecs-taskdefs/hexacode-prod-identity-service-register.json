@@ -1,0 +1,75 @@
+{
+  "family": "hexacode-prod-identity-service",
+  "taskRoleArn": "arn:aws:iam::380825342853:role/hexacode-prod-identity-task",
+  "executionRoleArn": "arn:aws:iam::380825342853:role/hexacode-prod-ecs-execution",
+  "networkMode": "awsvpc",
+  "containerDefinitions": [
+    {
+      "name": "identity-service",
+      "image": "380825342853.dkr.ecr.us-west-2.amazonaws.com/prod/hexacode:identity-service-20260424-094500",
+      "cpu": 0,
+      "portMappings": [
+        {
+          "containerPort": 8000,
+          "hostPort": 8000,
+          "protocol": "tcp"
+        }
+      ],
+      "essential": true,
+      "environment": [
+        {
+          "name": "COGNITO_JWKS_URL",
+          "value": "https://cognito-idp.us-west-2.amazonaws.com/us-west-2_LryzWA0j5/.well-known/jwks.json"
+        },
+        {
+          "name": "COGNITO_APP_CLIENT_ID",
+          "value": "7gf3q194gkpg30fbjhriq1t2v0"
+        },
+        {
+          "name": "COGNITO_ISSUER",
+          "value": "https://cognito-idp.us-west-2.amazonaws.com/us-west-2_LryzWA0j5"
+        },
+        {
+          "name": "LOG_LEVEL",
+          "value": "INFO"
+        },
+        {
+          "name": "COGNITO_USER_POOL_ID",
+          "value": "us-west-2_LryzWA0j5"
+        },
+        {
+          "name": "CORS_ALLOW_ORIGINS",
+          "value": "https://d2x2kyi0hl9xxu.cloudfront.net,http://localhost:5173,http://127.0.0.1:5173"
+        }
+      ],
+      "mountPoints": [],
+      "volumesFrom": [],
+      "secrets": [
+        {
+          "name": "DATABASE_URL",
+          "valueFrom": "arn:aws:secretsmanager:us-west-2:380825342853:secret:hexacode-prod-V7OL5l:DATABASE_URL::"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/hexacode-prod/identity-service",
+          "awslogs-region": "us-west-2",
+          "awslogs-stream-prefix": "ecs"
+        }
+      },
+      "systemControls": []
+    }
+  ],
+  "volumes": [],
+  "placementConstraints": [],
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "cpu": "2048",
+  "memory": "4096",
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  }
+}

@@ -8,3 +8,8 @@ coverage/
 artifacts/
 playwright-report/
 test-results/
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/crash.log
+terraform/terraform.tfvars

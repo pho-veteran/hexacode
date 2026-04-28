@@ -112,6 +112,31 @@ def error_response(status_code: int, message: str, correlation_id: str | None) -
     )
 
 
+def empty_response(status_code: int, correlation_id: str | None) -> dict[str, Any]:
+    headers: dict[str, str] = {}
+    if correlation_id:
+        headers["x-correlation-id"] = correlation_id
+    return {
+        "statusCode": status_code,
+        "headers": headers,
+        "body": "",
+        "isBase64Encoded": False,
+    }
+
+
+def get_http_method(event: dict[str, Any]) -> str:
+    request_context = event.get("requestContext")
+    if isinstance(request_context, dict):
+        http_context = request_context.get("http")
+        if isinstance(http_context, dict):
+            method = normalize_optional_text(http_context.get("method"))
+            if method:
+                return method.upper()
+
+    method = normalize_optional_text(event.get("httpMethod"))
+    return method.upper() if method else ""
+
+
 def decode_event_body(event: dict[str, Any]) -> Any:
     body = event.get("body")
     if body in (None, ""):
@@ -396,6 +421,9 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         or normalize_optional_text(getattr(context, "aws_request_id", None))
         or "unknown"
     )
+
+    if get_http_method(event) == "OPTIONS":
+        return empty_response(204, correlation_id)
 
     try:
         payload = normalize_chat_request(decode_event_body(event))

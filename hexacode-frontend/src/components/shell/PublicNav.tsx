@@ -23,7 +23,7 @@ export function PublicNav() {
     <header className="sticky top-0 z-30 backdrop-blur-md bg-[color-mix(in_srgb,var(--color-bg-base)_82%,transparent)] border-b border-[var(--color-border-hair)]">
       <div className="mx-auto max-w-[1160px] px-6 h-14 flex items-center justify-between">
         <div className="flex items-center gap-8">
-          <Brand />
+          <Brand to="/" />
           <nav className="hidden md:flex items-center gap-1">
             <NavLink to="/problems" className={navItem}>
               Problems

@@ -44,8 +44,8 @@ services:
 
   problem-service:
     build:
-      context: .
-      dockerfile: hexacode-backend/services/problem-service/Dockerfile
+      context: ./hexacode-backend
+      dockerfile: services/problem-service/Dockerfile
     env_file:
       - ./hexacode-backend/.env
     volumes:

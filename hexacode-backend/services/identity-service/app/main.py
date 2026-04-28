@@ -21,6 +21,7 @@ from backend_common.authz import (
     require_local_permission,
 )
 from backend_common.bootstrap import bootstrap_service
+from backend_common.cors import install_cors
 from backend_common.database import get_connection
 from backend_common.errors import install_exception_handlers
 from backend_common.identity import ensure_local_user
@@ -254,6 +255,7 @@ app = FastAPI(
     description="Platform identity, auth context, and RBAC management for Hexacode.",
     lifespan=lifespan,
 )
+install_cors(app)
 install_exception_handlers(app, SETTINGS.service_name)
 
 

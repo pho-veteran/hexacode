@@ -11,11 +11,14 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CATALOG_DIR = ROOT / "data" / "problems"
 ALLOWED_TARGET_STATUSES = {"draft", "pending_review", "approved", "published"}
 
 
 def detect_runtime_layout() -> tuple[Path, Path | None, Path]:
+    if (ROOT / "services" / "problem-service").exists() and (ROOT / "backend_common").exists():
+        backend_root = ROOT
+        service_root = backend_root / "services" / "problem-service"
+        return backend_root.parent, backend_root, service_root
     if (ROOT / "hexacode-backend").exists():
         backend_root = ROOT / "hexacode-backend"
         service_root = backend_root / "services" / "problem-service"
@@ -26,6 +29,7 @@ def detect_runtime_layout() -> tuple[Path, Path | None, Path]:
 
 
 REPO_ROOT, BACKEND_ROOT, PROBLEM_SERVICE_ROOT = detect_runtime_layout()
+DEFAULT_CATALOG_DIR = REPO_ROOT / "data" / "problems"
 DEFAULT_ENV_FILE = (BACKEND_ROOT / ".env") if BACKEND_ROOT is not None else (REPO_ROOT / ".env")
 
 

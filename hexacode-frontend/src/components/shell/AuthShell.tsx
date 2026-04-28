@@ -8,7 +8,7 @@ function AuthSidePanel() {
       <GradientCanvas variant="auth" />
       <GrainOverlay />
       <div className="relative z-10">
-        <Brand size="lg" />
+        <Brand size="lg" to="/" />
       </div>
       <div className="relative z-10 max-w-md">
         <div className="text-eyebrow">Hexacode</div>
@@ -62,7 +62,7 @@ export function AuthShell() {
       <div className="relative flex min-h-screen items-center justify-center px-6 py-12">
         <div className="w-full max-w-[420px]">
           <div className="lg:hidden mb-6">
-            <Brand />
+            <Brand to="/" />
           </div>
           <Outlet />
           <AuthRouteLinks />

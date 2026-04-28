@@ -47,6 +47,7 @@ from backend_common.cache import (
     read_json_cache,
     write_json_cache,
 )
+from backend_common.cors import install_cors
 from backend_common.database import get_connection
 from backend_common.errors import install_exception_handlers
 from backend_common.identity import ensure_local_user
@@ -4310,6 +4311,7 @@ app = FastAPI(
     description="Problem domain service with storage-backed authoring for statements and testsets.",
     lifespan=lifespan,
 )
+install_cors(app)
 install_exception_handlers(app, SETTINGS.service_name)
 
 

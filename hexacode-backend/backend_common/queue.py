@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlparse
 
 import boto3
 from botocore.config import Config
+from botocore.exceptions import ClientError
 
 from backend_common.settings import QueueSettings
 
@@ -67,7 +71,7 @@ class SQSJudgeQueue:
         self._client = boto3.client(
             "sqs",
             endpoint_url=settings.endpoint or None,
-            region_name="us-east-1",
+            region_name=_resolve_sqs_region(settings),
             aws_access_key_id="x" if settings.endpoint else None,
             aws_secret_access_key="x" if settings.endpoint else None,
             config=Config(retries={"max_attempts": 3, "mode": "standard"}),
@@ -79,12 +83,20 @@ class SQSJudgeQueue:
             raise RuntimeError("SQS_JUDGE_QUEUE_URL must be configured before queue bootstrap.")
 
         queue_url = self.settings.judge_queue_url
-        try:
-            if queue_url:
-                self._client.get_queue_url(QueueName=queue_name)
+        if queue_url:
+            try:
+                self._client.get_queue_attributes(
+                    QueueUrl=queue_url,
+                    AttributeNames=["QueueArn"],
+                )
                 return queue_url
-        except self._client.exceptions.QueueDoesNotExist:
-            pass
+            except ClientError as exc:
+                error_code = exc.response.get("Error", {}).get("Code", "")
+                if error_code not in {
+                    "AWS.SimpleQueueService.NonExistentQueue",
+                    "QueueDoesNotExist",
+                }:
+                    raise
 
         response = self._client.create_queue(QueueName=queue_name)
         return response["QueueUrl"]
@@ -122,3 +134,25 @@ class SQSJudgeQueue:
             QueueUrl=self.ensure_queue(),
             ReceiptHandle=receipt_handle,
         )
+
+
+def _resolve_sqs_region(settings: QueueSettings) -> str:
+    queue_region = _extract_region_from_queue_url(settings.judge_queue_url)
+    if queue_region:
+        return queue_region
+    return (
+        os.getenv("AWS_REGION", "").strip()
+        or os.getenv("AWS_DEFAULT_REGION", "").strip()
+        or "us-east-1"
+    )
+
+
+def _extract_region_from_queue_url(queue_url: str) -> str | None:
+    host = urlparse(queue_url).hostname or ""
+    if not host:
+        return None
+
+    match = re.match(r"^sqs[.-]([a-z0-9-]+)\.(?:amazonaws\.com|api\.aws)$", host)
+    if match:
+        return match.group(1)
+    return None

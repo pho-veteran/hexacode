@@ -1,0 +1,18 @@
+{
+  "containerOverrides": [
+    {
+      "name": "problem-service",
+      "command": [
+        "python",
+        "-c",
+        "from redis import Redis; import os, sys; client = Redis.from_url(os.environ['REDIS_URL'], decode_responses=True, socket_connect_timeout=2.0, socket_timeout=2.0); ok = client.ping(); print(ok); sys.exit(0 if ok else 1)"
+      ],
+      "environment": [
+        {
+          "name": "REDIS_URL",
+          "value": "rediss://problem-cache-deskyq.serverless.usw2.cache.amazonaws.com:6379"
+        }
+      ]
+    }
+  ]
+}

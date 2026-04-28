@@ -1,3 +1,5 @@
+This document is the architecture and sizing reference for the AWS target. For the operator-facing step-by-step runbook, see [aws-deployment-walkthrough.md](./aws-deployment-walkthrough.md).
+
 **1. Architecture Summary**
 Hexacode is a React SPA plus a FastAPI backend split into a thin API gateway, `identity-service`, `problem-service`, `submission-service`, a separate queue-polling `worker`, and an AWS `chat-lambda` for Bedrock-backed chat. Local infrastructure is PostgreSQL, Redis, MinIO, and ElasticMQ; the cloud target should preserve that shape with adapter swaps rather than an application rewrite.
 
@@ -104,9 +106,9 @@ Egress
 **6. Deployment Plan (step-by-step)**
 1. Provision the network first: VPC, two AZs, public subnets for NAT, private app subnets for ECS/internal ALB, private data subnets for RDS/Redis, route tables, NAT gateways, and VPC endpoints where used.
 2. Provision managed stateful services: RDS PostgreSQL 16, ElastiCache Redis, S3 buckets, SQS queue plus DLQ, Secrets Manager parameters/secrets, and Cognito User Pool/App Client.
-3. Create ECR repos for `identity-service`, `problem-service`, `submission-service`, and `worker`. Do not containerize the frontend for prod; build static assets instead.
-4. Build and push backend images using the repo’s actual Dockerfile contexts. Important detail: `problem-service` builds from repo root, while the other backend services build from `hexacode-backend/`.
-5. Create the ECS Fargate cluster, CloudWatch log groups, execution role, and per-service task roles. Use private subnets only. Set `S3_ENDPOINT` and `SQS_ENDPOINT` empty in AWS; keep `S3_BUCKET_*`, `SQS_JUDGE_QUEUE_URL`, `DATABASE_URL`, `REDIS_URL`, and `COGNITO_*` as env/secrets.
+3. Use the existing ECR repository `prod/hexacode` for backend images. Do not containerize the frontend for prod; build static assets instead.
+4. Build and push backend images from `hexacode-backend/`. Store all backend services in `prod/hexacode` and distinguish them with service-prefixed tags such as `identity-service-<gitsha>` and `problem-service-<gitsha>`. The catalog import helper now lives under the backend workspace as `hexacode-backend/scripts/import_problem_catalog.py`, so `problem-service` no longer needs repo-root build context.
+5. Create the ECS Fargate cluster, CloudWatch log groups, one shared execution role, and one task role per service. Use private subnets only and disable public IP assignment. In AWS, leave `S3_ENDPOINT` and `SQS_ENDPOINT` empty so boto3 uses native AWS endpoints, leave `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` unset so tasks use IAM roles, and set `AWS_REGION` to the deployment region. Inject `DATABASE_URL` through ECS secrets, keep `COGNITO_*`, `S3_BUCKET_*`, `SQS_JUDGE_QUEUE_URL`, and internal service base URLs as normal env vars, and only set `REDIS_URL` for `problem-service`. See [aws-deployment-walkthrough.md](./aws-deployment-walkthrough.md) for the concrete task-definition shape.
 6. Create an internal ALB with path-based rules matching the repo route manifest. Attach separate target groups for identity, problem, and submission services; use `/healthz` health checks.
 7. Deploy `identity-service`, `problem-service`, and `submission-service` as separate ECS services behind the ALB. Set internal service URL env vars to the internal ALB DNS name so service-to-service calls and worker callbacks use the same private entrypoint.
 8. Create API Gateway HTTP API with one VPC Link to the internal ALB. Mirror the route manifest prefixes as API Gateway routes, enable CORS for the frontend domain, and enable access logs.
@@ -138,27 +140,29 @@ Egress
 - `private_app_subnet_b`: `10.20.11.0/24` in `ap-southeast-1b`
 - `private_data_subnet_a`: `10.20.20.0/24` in `ap-southeast-1a`
 - `private_data_subnet_b`: `10.20.21.0/24` in `ap-southeast-1b`
-- Internet Gateway attached to VPC; one NAT Gateway per public subnet.
+- Internet Gateway attached to VPC.
+- Prefer AWS's Regional NAT Gateway option in the current VPC wizard. If you build the VPC manually instead, one NAT per public subnet remains a valid multi-AZ fallback.
 - Public route table: `0.0.0.0/0 -> igw`
 - Private app/data route tables: `0.0.0.0/0 -> nat`
 - S3 Gateway Endpoint attached to private route tables; Interface Endpoints recommended for ECR API, ECR DKR, CloudWatch Logs, Secrets Manager, STS, and SQS.
+- VPC DNS hostnames and VPC DNS resolution should both be enabled.
 - Note: ALB should be internal and live in `private_app_*`, not public subnets, because API Gateway is the public edge. Public subnets exist for NAT and future edge needs.
 
 **8.2 Networking & Security**
-- `sg_apigw_vpclink`: inbound none; outbound `tcp/443` to `sg_internal_alb`.
-- `sg_internal_alb`: inbound `tcp/443` from `sg_apigw_vpclink`; outbound `tcp/8000` to `sg_api_services`.
-- `sg_api_services`: inbound `tcp/8000` from `sg_internal_alb`; outbound `tcp/5432` to `sg_rds`; outbound `tcp/6379` to `sg_redis`; outbound `tcp/443` to `sg_internal_alb`; outbound `tcp/443` to `0.0.0.0/0` for Cognito JWKS and AWS APIs through NAT/endpoints.
-- `sg_worker`: inbound none; outbound `tcp/443` to `sg_internal_alb`; outbound `tcp/443` to `0.0.0.0/0`.
+- `sg_apigw_vpclink`: inbound none; outbound `tcp/80` to `sg_internal_alb`.
+- `sg_internal_alb`: inbound `tcp/80` from `sg_apigw_vpclink`; inbound `tcp/80` from `sg_api_services`; inbound `tcp/80` from `sg_worker`; outbound `tcp/8000` to `sg_api_services`.
+- `sg_api_services`: inbound `tcp/8000` from `sg_internal_alb`; outbound `tcp/5432` to `sg_rds`; outbound `tcp/6379` to `sg_redis`; outbound `tcp/80` to `sg_internal_alb`; outbound `tcp/443` to `0.0.0.0/0` for Cognito JWKS and AWS APIs through NAT/endpoints.
+- `sg_worker`: inbound none; outbound `tcp/80` to `sg_internal_alb`; outbound `tcp/443` to `0.0.0.0/0`.
 - `sg_rds`: inbound `tcp/5432` from `sg_api_services`; outbound default all within VPC.
 - `sg_redis`: inbound `tcp/6379` from `sg_api_services`; outbound default all within VPC.
-- ALB listener should be `443` with ACM cert on the internal ALB if you want TLS on the VPC hop; backend target groups can stay `HTTP:8000`.
+- ALB listener can stay `80` for a first deployment because API Gateway is already the public TLS edge. If you later want TLS on the VPC hop, move the internal ALB listener to `443` and update the VPC Link integration and SG rules accordingly.
 
 **8.3 IAM Roles & Policies**
-- `ecs_task_execution_role`: trust `ecs-tasks.amazonaws.com`; permissions `ecr:GetAuthorizationToken`, `ecr:BatchGetImage`, `ecr:GetDownloadUrlForLayer`, `logs:CreateLogStream`, `logs:PutLogEvents`, `logs:CreateLogGroup` if not pre-created.
-- `ecs_task_role_identity`: trust `ecs-tasks.amazonaws.com`; `secretsmanager:GetSecretValue` or `ssm:GetParameter` for identity service config; `kms:Decrypt` for the CMK protecting those secrets; no S3 or SQS permissions.
-- `ecs_task_role_problem`: trust `ecs-tasks.amazonaws.com`; secret reads; `s3:ListBucket` on `hexacode-${env}-problem-assets` with prefix conditions `problem/*` and `testset/*`; `s3:GetObject`,`PutObject`,`DeleteObject` on `arn:aws:s3:::hexacode-${env}-problem-assets/problem/*` and `.../testset/*`.
-- `ecs_task_role_submission`: trust `ecs-tasks.amazonaws.com`; secret reads; `sqs:GetQueueUrl`,`sqs:GetQueueAttributes`,`sqs:SendMessage` on the judge queue ARN; `s3:GetObject` on `hexacode-${env}-submission-artifacts/*`.
-- `ecs_task_role_worker`: trust `ecs-tasks.amazonaws.com`; secret reads; `sqs:GetQueueUrl`,`sqs:GetQueueAttributes`,`sqs:ReceiveMessage`,`sqs:DeleteMessage`,`sqs:ChangeMessageVisibility` on the judge queue ARN; `s3:GetObject` on `hexacode-${env}-problem-assets/problem/*`, `.../testset/*`, and `hexacode-${env}-submission-artifacts/submission/*`; `s3:PutObject` on `hexacode-${env}-problem-assets/problem/*/checker/*/compiled/*`.
+- `ecs_task_execution_role`: trust `ecs-tasks.amazonaws.com`; attach `AmazonECSTaskExecutionRolePolicy`, plus `secretsmanager:GetSecretValue` for any Secrets Manager ARNs referenced in ECS task-definition `secrets`, plus `kms:Decrypt` if those secrets use a customer-managed KMS key. If log groups are not pre-created, also allow `logs:CreateLogGroup`.
+- `ecs_task_role_identity`: trust `ecs-tasks.amazonaws.com`; no AWS API permissions are required for current code.
+- `ecs_task_role_problem`: trust `ecs-tasks.amazonaws.com`; `s3:ListBucket`,`s3:GetBucketLocation` on `hexacode-${env}-problem-assets`; `s3:GetObject`,`s3:PutObject`,`s3:DeleteObject` on `arn:aws:s3:::hexacode-${env}-problem-assets/problem/*` and `arn:aws:s3:::hexacode-${env}-problem-assets/testset/*`.
+- `ecs_task_role_submission`: trust `ecs-tasks.amazonaws.com`; `sqs:GetQueueUrl`,`sqs:GetQueueAttributes`,`sqs:SendMessage` on the judge queue ARN; `s3:ListBucket`,`s3:GetBucketLocation` on `hexacode-${env}-submission-artifacts`; `s3:GetObject` on `arn:aws:s3:::hexacode-${env}-submission-artifacts/*`.
+- `ecs_task_role_worker`: trust `ecs-tasks.amazonaws.com`; `sqs:GetQueueUrl`,`sqs:GetQueueAttributes`,`sqs:ReceiveMessage`,`sqs:DeleteMessage`,`sqs:ChangeMessageVisibility` on the judge queue ARN; `s3:GetObject` on `arn:aws:s3:::hexacode-${env}-problem-assets/problem/*` and `arn:aws:s3:::hexacode-${env}-problem-assets/testset/*`; `s3:PutObject` on `arn:aws:s3:::hexacode-${env}-problem-assets/problem/*/checker/*/compiled/*`. Add `s3:GetObject` on the submission bucket later if the worker starts reading submission artifacts from S3.
 - API Gateway custom IAM role is not required for HTTP API -> VPC Link -> ALB forwarding; use the AWS service-linked role for VPC Link/log delivery.
 
 **8.4 S3 Bucket Design**
@@ -208,7 +212,10 @@ Egress
 - Health checks: API services use `/healthz`; worker has no LB health check, only ECS task health and log/metric alarms
 - Deployment settings: rolling deploy with ECS deployment circuit breaker enabled, `minimum_healthy_percent=100`, `maximum_percent=200`
 - Environment/secrets injection:
-  - Common: `DATABASE_URL`, `COGNITO_USER_POOL_ID`, `COGNITO_APP_CLIENT_ID`, `COGNITO_ISSUER`, `COGNITO_JWKS_URL`, `S3_REGION`, `S3_BUCKET_PROBLEMS`, `S3_BUCKET_SUBMISSIONS`, `SQS_JUDGE_QUEUE_URL`
-  - AWS-specific blanks: `S3_ENDPOINT=""`, `SQS_ENDPOINT=""`
-  - Service URLs: set `PROBLEM_SERVICE_URL`, `SUBMISSION_SERVICE_URL`, `IDENTITY_SERVICE_URL` to the internal ALB base URL where needed
+  - Inject `DATABASE_URL` through ECS `secrets`; only `problem-service` needs `REDIS_URL`
+  - Keep `AWS_REGION`, `COGNITO_USER_POOL_ID`, `COGNITO_APP_CLIENT_ID`, `COGNITO_ISSUER`, `COGNITO_JWKS_URL`, `S3_REGION`, `S3_BUCKET_*`, `SQS_JUDGE_QUEUE_URL`, and internal service base URLs as normal env vars
+  - AWS-specific blanks: `S3_ENDPOINT=""`, `SQS_ENDPOINT=""`, `S3_BUCKET_SUBMISSIONS=""` for services that do not use it, `S3_BUCKET_PROBLEMS=""` for services that do not use it
+  - Leave `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` unset in AWS so boto3 uses the ECS task role
+  - Service URLs: set `PROBLEM_SERVICE_URL` and `SUBMISSION_SERVICE_URL` to the internal ALB base URL where needed; `IDENTITY_SERVICE_URL` is only needed if you deploy the local gateway container, which the AWS target does not require
   - Worker-specific: `WORKER_NAME`, `WORKER_VERSION`, `WORKER_POLL_INTERVAL_SECONDS`
+  - See [aws-deployment-walkthrough.md](./aws-deployment-walkthrough.md) for service-by-service task definition examples
