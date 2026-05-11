@@ -38,7 +38,8 @@ Hexacode is an online coding judge platform with:
 - `hexacode-backend/services/worker`
   - queue consumer for judge execution
 - `hexacode-backend/services/chat-lambda`
-  - AWS Lambda handler for Bedrock-backed chat
+  - AWS Lambda function (invoked by gateway via `/api/chat/*`), not a containerized microservice
+  - Bedrock-backed chat handler
 
 ## Local Infrastructure
 
@@ -99,6 +100,8 @@ Import flow:
 
 For the future cloud target, see `docs/cloud-deployment.md`.
 
+Production database traffic is routed through RDS Proxy before it reaches PostgreSQL, using the managed RDS master secret for proxy auth while Terraform rewrites the shared app secret's `DATABASE_URL` host to the proxy endpoint.
+
 - problems
 - tags
 - statements
@@ -119,6 +122,10 @@ Owns:
 - results
 - run metrics
 - outbox events
+- problem statistics aggregation (submissions_count, accepted_count, unique_solvers_count)
+- custom case submissions (inline test cases without a testset)
+
+Submissions have two kinds: **practice** (uses full hidden testset) and **run** (uses sample/custom/cases only). This distinction controls which testcases are revealed and whether stats are updated.
 
 ### Worker
 
@@ -198,6 +205,7 @@ Rules:
 - keep route definitions in one manifest or OpenAPI source
 - generate local gateway rules and cloud gateway rules from the same source
 - replacing the local gateway with AWS API Gateway must be a deployment concern, not an app rewrite
+- the route manifest lives at `hexacode-backend/contracts/route-manifest.json` — one source of truth for both local gateway routing rules and future AWS API Gateway config generation
 
 ## Storage Strategy
 
@@ -395,7 +403,7 @@ Build:
 2. problem library
 3. problem detail
 4. solve workspace
-5. problem authoring
+5. problem authoring (new / edit / testsets)
 
 Rule:
 
@@ -490,6 +498,8 @@ Defer until the core platform is stable:
 - notifications
 - discussions and editorials
 - gamification and secondary platform features
+
+Operational tooling (worker queue monitoring, storage lifecycle orphan cleanup) is in scope even when other deferred items are not.
 
 ## Success Criteria
 

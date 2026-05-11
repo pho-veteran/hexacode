@@ -90,6 +90,7 @@ Create these security groups:
 - `sg_internal_alb`
 - `sg_api_services`
 - `sg_worker`
+- `sg_rds_proxy`
 - `sg_rds`
 - `sg_redis`
 
@@ -107,7 +108,7 @@ Use these rules:
 
 - `sg_api_services`
   - inbound: `tcp/8000` from `sg_internal_alb`
-  - outbound: `tcp/5432` to `sg_rds`
+  - outbound: `tcp/5432` to `sg_rds_proxy`
   - outbound: `tcp/6379` to `sg_redis`
   - outbound: `tcp/80` to `sg_internal_alb`
   - outbound: `tcp/443` to AWS APIs through NAT or interface endpoints
@@ -117,8 +118,12 @@ Use these rules:
   - outbound: `tcp/80` to `sg_internal_alb`
   - outbound: `tcp/443` to AWS APIs through NAT or interface endpoints
 
-- `sg_rds`
+- `sg_rds_proxy`
   - inbound: `tcp/5432` from `sg_api_services`
+  - outbound: `tcp/5432` to `sg_rds`
+
+- `sg_rds`
+  - inbound: `tcp/5432` from `sg_rds_proxy`
 
 - `sg_redis`
   - inbound: `tcp/6379` from `sg_api_services`
@@ -201,6 +206,8 @@ Store JSON like this in that secret:
   "REDIS_URL": "redis://your-redis-endpoint:6379"
 }
 ```
+
+Terraform later rewrites the `DATABASE_URL` host to the RDS Proxy endpoint while keeping the same secret ARN and preserving the other keys. The proxy itself authenticates with the managed RDS master secret, so no second application credential source is introduced.
 
 The task definitions below inject `DATABASE_URL` and `REDIS_URL` from that single JSON secret by key.
 

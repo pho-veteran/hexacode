@@ -407,6 +407,7 @@ def cache_compiled_checker_artifact(
         data=artifact_bytes,
         content_type="application/octet-stream",
         metadata=metadata_json,
+        tags={"lifecycle": "compiled-checker"},
     )
     registered = register_compiled_checker_artifact(
         problem_service_url,

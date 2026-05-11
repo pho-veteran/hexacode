@@ -1,0 +1,13 @@
+region                 = "ap-southeast-1"
+environment            = "prod"
+vpc_cidr               = "10.20.0.0/16"
+availability_zones     = ["a", "b"]
+db_instance_class      = "db.r6g.large"
+db_multi_az            = true
+db_allocated_storage   = 200
+application_secret_arn = "arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:hexacode-prod-app"
+ecr_repository_url     = "123456789012.dkr.ecr.ap-southeast-1.amazonaws.com/prod/hexacode"
+image_tag              = "git-sha-or-release-tag"
+chat_lambda_arn        = "arn:aws:lambda:ap-southeast-1:123456789012:function:hexacode-prod-chat"
+frontend_domain        = "https://d2x2kyi0hl9xxu.cloudfront.net"
+cors_lambda_arn        = "arn:aws:lambda:ap-southeast-1:123456789012:function:hexacode-prod-cors"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from urllib.parse import urlencode
 
 import boto3
 from botocore.client import BaseClient
@@ -63,6 +64,7 @@ def upload_object_bytes(
     data: bytes,
     content_type: str | None = None,
     metadata: dict[str, Any] | None = None,
+    tags: dict[str, Any] | None = None,
 ) -> dict[str, str | None]:
     if settings.driver != "s3":
         raise RuntimeError("Only the s3 storage driver is currently supported.")
@@ -77,6 +79,8 @@ def upload_object_bytes(
         put_kwargs["ContentType"] = content_type
     if metadata:
         put_kwargs["Metadata"] = {str(key): str(value) for key, value in metadata.items()}
+    if tags:
+        put_kwargs["Tagging"] = urlencode({str(key): str(value) for key, value in tags.items()})
 
     response = client.put_object(**put_kwargs)
     etag = response.get("ETag")

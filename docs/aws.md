@@ -151,9 +151,10 @@ Egress
 **8.2 Networking & Security**
 - `sg_apigw_vpclink`: inbound none; outbound `tcp/80` to `sg_internal_alb`.
 - `sg_internal_alb`: inbound `tcp/80` from `sg_apigw_vpclink`; inbound `tcp/80` from `sg_api_services`; inbound `tcp/80` from `sg_worker`; outbound `tcp/8000` to `sg_api_services`.
-- `sg_api_services`: inbound `tcp/8000` from `sg_internal_alb`; outbound `tcp/5432` to `sg_rds`; outbound `tcp/6379` to `sg_redis`; outbound `tcp/80` to `sg_internal_alb`; outbound `tcp/443` to `0.0.0.0/0` for Cognito JWKS and AWS APIs through NAT/endpoints.
+- `sg_api_services`: inbound `tcp/8000` from `sg_internal_alb`; outbound `tcp/5432` to `sg_rds_proxy`; outbound `tcp/6379` to `sg_redis`; outbound `tcp/80` to `sg_internal_alb`; outbound `tcp/443` to `0.0.0.0/0` for Cognito JWKS and AWS APIs through NAT/endpoints.
 - `sg_worker`: inbound none; outbound `tcp/80` to `sg_internal_alb`; outbound `tcp/443` to `0.0.0.0/0`.
-- `sg_rds`: inbound `tcp/5432` from `sg_api_services`; outbound default all within VPC.
+- `sg_rds_proxy`: inbound `tcp/5432` from `sg_api_services`; outbound `tcp/5432` to `sg_rds`.
+- `sg_rds`: inbound `tcp/5432` from `sg_rds_proxy`; outbound default all within VPC.
 - `sg_redis`: inbound `tcp/6379` from `sg_api_services`; outbound default all within VPC.
 - ALB listener can stay `80` for a first deployment because API Gateway is already the public TLS edge. If you later want TLS on the VPC hop, move the internal ALB listener to `443` and update the VPC Link integration and SG rules accordingly.
 
@@ -189,7 +190,7 @@ Egress
 - Production suggestion: `db.r6g.large`, `gp3`, `200 GiB`, Multi-AZ, backups `14 days`
 - Enable Performance Insights and enhanced monitoring.
 - Put RDS in a DB subnet group containing `private_data_subnet_a` and `private_data_subnet_b`.
-- Use Secrets Manager for credentials and construct `DATABASE_URL` from that secret.
+- Use Secrets Manager for credentials and construct `DATABASE_URL` from that secret; the proxy authenticates with the managed RDS master secret, and in AWS the app secret is rewritten so the host points at RDS Proxy instead of the direct RDS endpoint.
 - Run `hexacode-backend/db/new-app-schema.sql` as the bootstrap schema job.
 
 **8.7 Redis (ElastiCache)**
