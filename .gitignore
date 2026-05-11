@@ -13,6 +13,7 @@ terraform/*.tfstate
 terraform/*.tfstate.*
 terraform/crash.log
 terraform/terraform.tfvars
+terraform/modules/*/.terraform.lock.hcl
 
 .claude/
 # CocoIndex Code (ccc)
