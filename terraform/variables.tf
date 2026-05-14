@@ -155,3 +155,20 @@ variable "client_vpn_root_certificate_chain_arn" {
   type        = string
   default     = ""
 }
+
+variable "management_vpc_enabled" {
+  description = "Create a separate management VPC with an SSM-managed operator host and peering to the application VPC."
+  type        = bool
+  default     = false
+}
+
+variable "management_vpc_cidr_block" {
+  description = "CIDR block for the management VPC. Must not overlap the application VPC CIDR."
+  type        = string
+  default     = "10.22.0.0/20"
+
+  validation {
+    condition     = can(cidrhost(var.management_vpc_cidr_block, 0))
+    error_message = "management_vpc_cidr_block must be a valid IPv4 CIDR block."
+  }
+}

@@ -63,13 +63,28 @@ def promote_admin(
         cognito_sub=cognito_sub,
     )
 
-    comparator = f"lower({column}) = lower(%s)" if column in {"username", "email"} else f"{column} = %s"
-
     with psycopg.connect(database_url, row_factory=dict_row) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
+                """
+                select column_name
+                from information_schema.columns
+                where table_schema = 'app_identity'
+                  and table_name = 'users'
+                """
+            )
+            available_columns = {row["column_name"] for row in cursor.fetchall()}
+            if column not in available_columns:
+                raise LookupError(f"No local user column found for {column} lookup.")
+
+            selected_columns = ["id::text as id", "username", "cognito_sub"]
+            if "email" in available_columns:
+                selected_columns.insert(2, "email")
+
+            comparator = f"lower({column}) = lower(%s)" if column in {"username", "email"} else f"{column} = %s"
+            cursor.execute(
                 f"""
-                select id::text as id, username, email, cognito_sub
+                select {', '.join(selected_columns)}
                 from app_identity.users
                 where {comparator}
                 """,

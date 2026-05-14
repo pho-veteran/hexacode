@@ -115,6 +115,57 @@ module "elasticache" {
   redis_security_group_id = module.security_groups.sg_redis_id
 }
 
+module "management_vpc" {
+  count  = var.management_vpc_enabled ? 1 : 0
+  source = "./modules/management-vpc"
+
+  environment                      = var.environment
+  region                           = var.region
+  availability_zones               = var.availability_zones
+  management_vpc_cidr_block        = var.management_vpc_cidr_block
+  app_vpc_id                       = module.vpc.vpc_id
+  app_vpc_cidr_block               = var.cidr_block
+  app_private_app_route_table_ids  = module.vpc.private_app_route_table_ids
+  app_private_data_route_table_ids = module.vpc.private_data_route_table_ids
+  application_secret_arn           = local.effective_application_secret_arn
+  problem_bucket_arn               = module.s3_buckets.problem_bucket_arn
+  submission_bucket_arn            = module.s3_buckets.submission_bucket_arn
+  kms_key_arn                      = var.kms_key_arn
+}
+
+resource "aws_vpc_security_group_ingress_rule" "rds_proxy_from_management_bastion" {
+  count = var.management_vpc_enabled ? 1 : 0
+
+  security_group_id            = module.security_groups.sg_rds_proxy_id
+  referenced_security_group_id = module.management_vpc[0].bastion_security_group_id
+  from_port                    = 5432
+  to_port                      = 5432
+  ip_protocol                  = "tcp"
+  description                  = "PostgreSQL from SSM management host"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "internal_alb_from_management_bastion" {
+  count = var.management_vpc_enabled ? 1 : 0
+
+  security_group_id            = module.security_groups.sg_internal_alb_id
+  referenced_security_group_id = module.management_vpc[0].bastion_security_group_id
+  from_port                    = 80
+  to_port                      = 80
+  ip_protocol                  = "tcp"
+  description                  = "HTTP smoke checks from SSM management host"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "efs_from_management_bastion" {
+  count = var.management_vpc_enabled ? 1 : 0
+
+  security_group_id            = module.security_groups.sg_efs_id
+  referenced_security_group_id = module.management_vpc[0].bastion_security_group_id
+  from_port                    = 2049
+  to_port                      = 2049
+  ip_protocol                  = "tcp"
+  description                  = "NFS inspection from SSM management host"
+}
+
 module "iam" {
   source                 = "./modules/iam"
   environment            = var.environment

@@ -160,6 +160,11 @@ output "db_master_user_secret_arn" {
   value       = module.rds.db_master_user_secret_arn
 }
 
+output "application_secret_arn" {
+  description = "ARN of the runtime application secret used by ECS services and operator scripts"
+  value       = local.effective_application_secret_arn
+}
+
 output "db_instance_arn" {
   description = "ARN of the RDS instance"
   value       = module.rds.db_instance_arn
@@ -248,13 +253,38 @@ output "ecs_cluster_arn" {
 }
 
 output "problem_task_definition_arn" {
-  description = "Problem service task definition ARN for one-off seed tasks"
+  description = "Problem service task definition ARN for the deployed runtime service"
   value       = module.ecs_services.problem_task_definition_arn
 }
 
 output "identity_task_definition_arn" {
-  description = "Identity service task definition ARN for one-off admin tasks"
+  description = "Identity service task definition ARN for the deployed runtime service"
   value       = module.ecs_services.identity_task_definition_arn
+}
+
+output "management_vpc_id" {
+  description = "Management VPC ID when management access is enabled"
+  value       = try(module.management_vpc[0].vpc_id, null)
+}
+
+output "management_public_subnet_ids" {
+  description = "Management VPC public subnet IDs when management access is enabled"
+  value       = try(module.management_vpc[0].public_subnet_ids, null)
+}
+
+output "management_bastion_instance_id" {
+  description = "SSM-managed management host instance ID when management access is enabled"
+  value       = try(module.management_vpc[0].bastion_instance_id, null)
+}
+
+output "management_bastion_security_group_id" {
+  description = "Security group ID for the SSM-managed management host when management access is enabled"
+  value       = try(module.management_vpc[0].bastion_security_group_id, null)
+}
+
+output "management_peering_connection_id" {
+  description = "VPC peering connection ID between management and application VPCs when enabled"
+  value       = try(module.management_vpc[0].peering_connection_id, null)
 }
 
 # IAM Outputs

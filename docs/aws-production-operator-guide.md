@@ -1,6 +1,6 @@
 # Hexacode AWS Production Operator Guide
 
-This guide explains how to deploy and operate Hexacode on AWS using Terraform, ECR, ECS Fargate, RDS/RDS Proxy, Client VPN, S3, SQS, Cognito, API Gateway, Lambda, WAF, Network Firewall, EFS, AWS Backup, and CloudFront.
+This guide explains how to deploy and operate Hexacode on AWS using Terraform, ECR, ECS Fargate, RDS/RDS Proxy, SSM Session Manager, a Management VPC, S3, SQS, Cognito, API Gateway, Lambda, WAF, Network Firewall, EFS, AWS Backup, and CloudFront.
 
 The current W5 cloud-debugging deployment target is `hexacode-dev`. Do not touch the existing live `hexacode-prod` stack, ECR repository, VPC, state, or frontend distribution unless the deployment owner explicitly changes the target environment.
 
@@ -27,9 +27,9 @@ Set Terraform `image_tag` to the same suffix used in the Docker/ECR tags, usuall
 
 Hexacode runs the API services and judge worker on ECS Fargate in private subnets. `identity-service`, `problem-service`, and `submission-service` sit behind an internal ALB. The worker has no public listener; it polls SQS and calls internal service APIs through the same internal ALB.
 
-### One-off ECS Fargate tasks
+### Management VPC and SSM operator host
 
-Repeatable operational jobs run as one-off Fargate tasks using existing task definitions, private app subnets, and the API-services security group. Use this pattern for initial problem seeding, first-admin promotion, and future migration/maintenance jobs that need private VPC access.
+Repeatable operational jobs run from an ops bundle on the SSM-managed operator host in the Management VPC. The Management VPC peers with the application VPC and has narrowly scoped security-group access to private resources such as RDS Proxy, the internal ALB, and approved EFS inspection paths. Do not put seed/admin/repair scripts into long-running ECS service images.
 
 ### Private RDS and RDS Proxy
 
@@ -37,7 +37,7 @@ RDS remains private in data subnets. Application tasks connect through RDS Proxy
 
 ### Client VPN human access
 
-Approved human database access goes through AWS Client VPN into the VPC, then to the private RDS Proxy endpoint on port `5432`. Client VPN is optional in Terraform and should be enabled only after ACM certificate ARNs are ready.
+Client VPN is optional legacy human-access plumbing. Prefer the Management VPC and SSM operator host for W5 dev operations. If Client VPN is enabled, approved human database access goes through AWS Client VPN into the VPC, then to the private RDS Proxy endpoint on port `5432`. Enable it only after ACM certificate ARNs are ready.
 
 ### Cognito users vs local app roles
 
@@ -59,7 +59,9 @@ Before touching AWS, confirm these are true:
 - `application_secret_arn` is empty for the Terraform-managed dev runtime secret, or points to an existing dev Secrets Manager secret if intentionally reusing one.
 - `frontend_domain` can be empty for the first dev apply. If using the generated dev CloudFront domain, plan for the two-pass frontend-domain update described below.
 - If Client VPN is enabled, the server and client-root ACM certificate ARNs are dev-safe and not copied from prod by accident.
-- No private certificate material, passwords, AWS secret keys, or raw browser tokens are pasted into docs or committed files.
+- If Management VPC is enabled, `management_vpc_cidr_block` does not overlap the application VPC CIDR or any existing VPC CIDR in the account.
+- The local operator has permission to call `ssm:StartSession` on the management host and has the Session Manager plugin installed if using AWS CLI interactive sessions.
+- No private certificate material, passwords, AWS secret keys, raw browser tokens, or database passwords are pasted into docs or committed files.
 
 Stop immediately if a plan, command, output, or console page references `hexacode-prod`, `prod/terraform.tfstate`, `prod/hexacode`, or the existing production CloudFront domain during the dev deployment flow.
 
@@ -84,11 +86,13 @@ Copy-Item terraform/backend-dev.hcl.example terraform/backend-dev.hcl
 Review `terraform/terraform-dev.tfvars` before planning. Minimum dev isolation values:
 
 ```hcl
-environment         = "dev"
-cidr_block          = "10.21.0.0/16"
-ecr_repository_name = "dev/hexacode"
-image_tag           = "dev-git-sha"
-frontend_domain     = ""
+environment               = "dev"
+cidr_block                = "10.21.0.0/16"
+ecr_repository_name       = "dev/hexacode"
+image_tag                 = "dev-git-sha"
+frontend_domain           = ""
+management_vpc_enabled    = false
+management_vpc_cidr_block = "10.22.0.0/20"
 ```
 
 Use `frontend_domain = ""` only for the first dev apply. After Terraform creates the dev CloudFront distribution, set it to `https://<dev-cloudfront-domain>` and run a second reviewed dev plan/apply so Cognito callbacks, API Gateway CORS, CORS Lambda, and the chat Lambda allowed origin match the dev browser origin.
@@ -330,84 +334,110 @@ aws cloudfront create-invalidation --distribution-id $env:CLOUDFRONT_DISTRIBUTIO
 
 Expected: CloudFront serves the new frontend and the frontend points to the dev API Gateway/Cognito settings for the W5 rollout.
 
-## Seed initial problems
+## Management access through SSM
 
-Use a one-off ECS Fargate task for the initial problem catalog import. Build and push the problem-service image tag referenced by Terraform before running the seed task. The production problem-service image includes `scripts/import_problem_catalog.py` and the curated `data/problems` catalog at `/app/data/problems`.
+Use the SSM-managed operator host for seed, admin, and repair operations. The host lives in the Management VPC and reaches private application resources through VPC peering and least-privilege security-group rules. Do not put one-off operator scripts into long-running ECS runtime images.
 
-Set the shared task values from Terraform outputs:
+Collect the management outputs after Terraform apply:
 
 ```powershell
 $env:AWS_REGION = "us-west-2"
-$env:ECS_CLUSTER = terraform -chdir=terraform output -raw ecs_cluster_name
-$env:PRIVATE_SUBNETS = (terraform -chdir=terraform output -json private_app_subnet_ids | ConvertFrom-Json) -join ","
-$env:API_SG = terraform -chdir=terraform output -raw sg_api_services_id
-$env:PROBLEM_TASK_DEF = terraform -chdir=terraform output -raw problem_task_definition_arn
+$env:MANAGEMENT_BASTION_INSTANCE_ID = terraform -chdir=terraform output -raw management_bastion_instance_id
+$env:DB_PROXY_ENDPOINT = terraform -chdir=terraform output -raw db_proxy_endpoint
+$env:INTERNAL_ALB_DNS = terraform -chdir=terraform output -raw internal_alb_dns_name
+$env:APPLICATION_SECRET_ARN = terraform -chdir=terraform output -raw application_secret_arn
 ```
 
-Run the seed task:
+Start an SSM session:
 
 ```powershell
-$seedOverride = @{
-  containerOverrides = @(
-    @{
-      name = "problem-service"
-      command = @("python", "scripts/import_problem_catalog.py", "--catalog-dir", "/app/data/problems", "--skip-env-file", "--fail-on-existing")
-    }
-  )
-} | ConvertTo-Json -Compress -Depth 5
-
-$seedTask = aws ecs run-task `
+aws ssm start-session `
   --region $env:AWS_REGION `
-  --cluster $env:ECS_CLUSTER `
-  --launch-type FARGATE `
-  --task-definition $env:PROBLEM_TASK_DEF `
-  --network-configuration "awsvpcConfiguration={subnets=[$env:PRIVATE_SUBNETS],securityGroups=[$env:API_SG],assignPublicIp=DISABLED}" `
-  --overrides $seedOverride `
-  --query "tasks[0].taskArn" `
-  --output text
-
-$env:TASK_ARN = $seedTask.Trim()
-aws ecs wait tasks-stopped --region $env:AWS_REGION --cluster $env:ECS_CLUSTER --tasks $env:TASK_ARN
-aws ecs describe-tasks --region $env:AWS_REGION --cluster $env:ECS_CLUSTER --tasks $env:TASK_ARN --query "tasks[0].containers[0].exitCode"
-aws logs tail /ecs/hexacode-dev/problem-service --region $env:AWS_REGION --since 30m
+  --target $env:MANAGEMENT_BASTION_INSTANCE_ID
 ```
 
-Expected: exit code is `0`, logs print JSON with created/imported problem counts, and the frontend problem list shows seeded problems.
+Inside the SSM shell, stage a release-matched ops bundle. The bundle must include `hexacode-backend/scripts`, `hexacode-backend/backend_common`, `hexacode-backend/services/problem-service`, `hexacode-backend/db`, and `data/problems`. Use a tagged release, trusted S3 artifact, or reviewed repository checkout. Do not paste secrets into shell history or committed files.
+
+Install runtime dependencies on the management host if the bundle is not prebuilt. Amazon Linux 2023 may provide Python 3.9 as `python3`, so install the exact dependency set for the operation instead of installing a service package that requires Python 3.12:
+
+```bash
+python3 -m venv /home/ssm-user/hexacode-ops-venv
+source /home/ssm-user/hexacode-ops-venv/bin/activate
+pip install --upgrade pip
+pip install "psycopg[binary]>=3.2,<4.0"
+```
+
+For catalog import, use a Python 3.12 ops bundle or install Python 3.12 on the management host before installing `hexacode-backend/services/problem-service`.
+
+Load runtime environment from the application secret without printing it:
+
+```bash
+APP_SECRET_ARN="<application-secret-arn>"
+aws secretsmanager get-secret-value --secret-id "$APP_SECRET_ARN" --query SecretString --output text > /tmp/hexacode-app-secret.json
+export DATABASE_URL="$(python3 - <<'PY'
+import json
+print(json.load(open('/tmp/hexacode-app-secret.json'))['DATABASE_URL'])
+PY
+)"
+export REDIS_URL="$(python3 - <<'PY'
+import json
+payload = json.load(open('/tmp/hexacode-app-secret.json'))
+print(payload.get('REDIS_URL', ''))
+PY
+)"
+export S3_BUCKET_PROBLEMS="$(python3 - <<'PY'
+import json
+payload = json.load(open('/tmp/hexacode-app-secret.json'))
+print(payload.get('S3_BUCKET_PROBLEMS', ''))
+PY
+)"
+export S3_BUCKET_SUBMISSIONS="$(python3 - <<'PY'
+import json
+payload = json.load(open('/tmp/hexacode-app-secret.json'))
+print(payload.get('S3_BUCKET_SUBMISSIONS', ''))
+PY
+)"
+rm -f /tmp/hexacode-app-secret.json
+```
+
+Smoke check private access from the management host:
+
+```bash
+curl -sS "http://<internal-alb-dns>/api/runtimes" >/tmp/hexacode-runtimes.json
+python3 - <<'PY'
+from pathlib import Path
+payload = Path('/tmp/hexacode-runtimes.json').read_text()
+raise SystemExit(0 if payload.strip() else 1)
+PY
+```
+
+## Seed initial problems
+
+Run the seed script from the ops bundle on the SSM management host:
+
+```bash
+cd /home/ssm-user/hexacode
+source /home/ssm-user/hexacode-ops-venv/bin/activate
+python3 hexacode-backend/scripts/import_problem_catalog.py \
+  --catalog-dir data/problems \
+  --skip-env-file \
+  --fail-on-existing
+```
+
+Expected: the script exits `0`, prints JSON with created/imported problem counts, and the frontend problem list shows seeded problems.
 
 ## Promote initial admin
 
-The user must sign in through Cognito once before promotion so the app has a local `app_identity.users` row to update.
+The user must sign in through Cognito once before promotion so the app has a local `app_identity.users` row to update. Then run the promotion script from the ops bundle on the SSM management host:
 
-```powershell
-$env:IDENTITY_TASK_DEF = terraform -chdir=terraform output -raw identity_task_definition_arn
-$env:ADMIN_USERNAME = "username-that-signed-in-once"
-
-$adminOverride = @{
-  containerOverrides = @(
-    @{
-      name = "identity-service"
-      command = @("python", "scripts/promote_admin.py", "--username", $env:ADMIN_USERNAME)
-    }
-  )
-} | ConvertTo-Json -Compress -Depth 5
-
-$adminTask = aws ecs run-task `
-  --region $env:AWS_REGION `
-  --cluster $env:ECS_CLUSTER `
-  --launch-type FARGATE `
-  --task-definition $env:IDENTITY_TASK_DEF `
-  --network-configuration "awsvpcConfiguration={subnets=[$env:PRIVATE_SUBNETS],securityGroups=[$env:API_SG],assignPublicIp=DISABLED}" `
-  --overrides $adminOverride `
-  --query "tasks[0].taskArn" `
-  --output text
-
-$env:TASK_ARN = $adminTask.Trim()
-aws ecs wait tasks-stopped --region $env:AWS_REGION --cluster $env:ECS_CLUSTER --tasks $env:TASK_ARN
-aws ecs describe-tasks --region $env:AWS_REGION --cluster $env:ECS_CLUSTER --tasks $env:TASK_ARN --query "tasks[0].containers[0].exitCode"
-aws logs tail /ecs/hexacode-dev/identity-service --region $env:AWS_REGION --since 30m
+```bash
+cd /home/ssm-user/hexacode
+source /home/ssm-user/hexacode-ops-venv/bin/activate
+ADMIN_USERNAME="username-that-signed-in-once"
+python3 hexacode-backend/scripts/promote_admin.py --username "$ADMIN_USERNAME"
 ```
 
-Expected: exit code is `0`, and task logs include JSON with `"promoted": true` and `"role_code": "admin"`.
+Expected: the command exits `0` and prints JSON with `"promoted": true` and `"role_code": "admin"`.
 
 ## W5 dev smoke tests
 
@@ -519,7 +549,9 @@ Record every production deployment in a journal entry outside committed secrets.
 - Terraform plan file:
 - ECR tags pushed:
 - Frontend artifact source:
+- Ops bundle source/version:
 - Terraform apply start/end:
+- SSM session ID/log reference:
 - Smoke test result:
 - Issues found:
 - Rollback tag/artifact:

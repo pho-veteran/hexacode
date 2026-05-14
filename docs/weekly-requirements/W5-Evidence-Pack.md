@@ -7,29 +7,31 @@
 - **Repository:** To be added before Friday presentation
 - **Prior evidence pack:** To be added before Friday presentation
 - **Target production region:** us-west-2
-- **Architecture path:** Path C — Justified Single-VPC
+- **Architecture path:** Path C — Justified Single Application VPC with Separate Management Access Plane
 
-## 2. MH1 — Multi-VPC Connectivity: Justified Single-VPC
+## 2. MH1 — Multi-VPC Connectivity: Justified Single Application VPC + Management VPC
 
 ### Decision
 
-Hexacode chooses **Path C — Justified Single-VPC** for W5.
+Hexacode chooses **Path C — Justified Single Application VPC** for W5 runtime workloads, plus a separate Management VPC for operator access.
 
 ### Production rationale
 
 Hexacode is one tightly coupled production application boundary: frontend delivery, API Gateway, internal ALB, ECS application services, asynchronous judge workers, chat Lambda API surface, RDS Proxy/RDS, Redis, queueing, and EFS-backed submission artifacts all serve the same product, users, and deployment lifecycle.
 
-A multi-VPC design would be justified if Hexacode had separate trust domains, separate compliance boundaries, or independently owned platform domains. It does not today. Splitting the current production system across multiple VPCs would add Transit Gateway or peering, duplicated route tables, cross-VPC DNS, cross-VPC service discovery, private integration complexity, and harder incident response without creating a meaningful isolation boundary.
+A multi-VPC split for runtime services would be justified if Hexacode had separate trust domains, separate compliance boundaries, or independently owned platform domains. It does not today. Splitting the current production runtime across multiple VPCs would add Transit Gateway or broad service peering, duplicated route tables, cross-VPC DNS, cross-VPC service discovery, private integration complexity, and harder incident response without creating a meaningful runtime isolation boundary.
 
-The production hardening therefore happens inside one well-designed VPC: WAF at the public edge, API Gateway authentication and throttling, least-privilege security groups, private app and data subnet tiers, Network Firewall egress inspection, Regional NAT, VPC Flow Logs to CloudWatch, and AWS Backup for stateful resources.
+Hexacode does benefit from separating the operator access plane from the application runtime plane. The Management VPC hosts an SSM-managed operator host and peers to the application VPC for tightly scoped seed, admin, repair, and smoke-test access. This keeps RDS, Redis, EFS, and ECS services private while avoiding operator-only scripts in long-running service images.
 
-### Why not Multi-VPC now
+The production hardening therefore happens across one well-designed application VPC and one narrow management access VPC: WAF at the public edge, API Gateway authentication and throttling, least-privilege security groups, private app and data subnet tiers, Network Firewall egress inspection, Regional NAT, VPC Flow Logs to CloudWatch, AWS Backup for stateful resources, and SSM Session Manager for audited operator access.
+
+### Why not split runtime services across multiple VPCs now
 
 - The app does not have independently owned product domains.
 - The judge, submission, problem, identity, storage, and chat paths are part of one production system.
-- RDS Proxy, Redis, EFS, internal ALB, and ECS services are already designed around single-VPC private connectivity.
-- Multi-VPC would increase operational failure modes before it creates a real isolation boundary.
-- W5 security and observability requirements are better satisfied by hardening the existing VPC path than by introducing unnecessary routing complexity.
+- RDS Proxy, Redis, EFS, internal ALB, and ECS services are already designed around single application VPC private connectivity.
+- Runtime multi-VPC would increase operational failure modes before it creates a real isolation boundary.
+- W5 security and observability requirements are better satisfied by hardening the application VPC path and adding a narrow management access plane.
 
 ### Future triggers for Multi-VPC
 
@@ -43,7 +45,12 @@ Hexacode should revisit Multi-VPC if one of these events occurs:
 
 ### Evidence to attach
 
-- VPC subnet and route table screenshots: <evidence to add after deploy>
+- Application VPC subnet and route table screenshots: <evidence to add after deploy>
+- Management VPC CIDR, subnet, and route table screenshots: <evidence to add after deploy>
+- VPC peering connection and DNS-resolution settings: <evidence to add after deploy>
+- App private route tables showing management CIDR return routes: <evidence to add after deploy>
+- SSM managed instance evidence for the operator host: <evidence to add after deploy>
+- Management security-group rules limited to RDS Proxy/internal ALB/EFS as approved: <evidence to add after deploy>
 - VPC Flow Logs sample entries from CloudWatch: <evidence to add after deploy>
 - Mapping between subnet tiers and Terraform resources: <evidence to add after deploy>
 
@@ -116,11 +123,13 @@ This keeps the current serverless chat path, scales with demand, and caps runawa
 
 - End-to-end submission execution: <evidence to add after deploy>
 - Bedrock or chat retrieval: <evidence to add after deploy>
-- Database query or admin operation: <evidence to add after deploy>
+- Database query or admin operation from SSM management host: <evidence to add after deploy>
+- Problem seed or admin promotion script executed from ops bundle, not runtime ECS image: <evidence to add after deploy>
 
 ## 8. Negative Security Tests
 
 - Unauthenticated chat request rejected before Lambda: <evidence to add after deploy>
 - Network Firewall blocked request: <evidence to add after deploy>
 - Backup or restore validation result: <evidence to add after deploy>
-- EFS access restricted to app and worker security groups: <evidence to add after deploy>
+- EFS access restricted to app, worker, and approved management security groups only: <evidence to add after deploy>
+- Runtime service image inspection shows seed/admin scripts are absent: <evidence to add after deploy>

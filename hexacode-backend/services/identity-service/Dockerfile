@@ -6,7 +6,6 @@ COPY services/identity-service/pyproject.toml ./pyproject.toml
 COPY services/identity-service/app ./app
 COPY backend_common ./backend_common
 COPY db ./db
-COPY scripts/promote_admin.py ./scripts/promote_admin.py
 
 RUN pip install --no-cache-dir .
 
