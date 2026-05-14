@@ -4,6 +4,7 @@ locals {
   public_cidrs       = [for index in range(length(var.availability_zones)) : cidrsubnet(var.vpc_cidr, 8, index)]
   private_app_cidrs  = [for index in range(length(var.availability_zones)) : cidrsubnet(var.vpc_cidr, 8, index + 10)]
   private_data_cidrs = [for index in range(length(var.availability_zones)) : cidrsubnet(var.vpc_cidr, 8, index + 20)]
+  firewall_cidrs     = [for index in range(length(var.availability_zones)) : cidrsubnet(var.vpc_cidr, 8, index + 30)]
 
   interface_endpoints = {
     ecr_api        = "com.amazonaws.${var.region}.ecr.api"
@@ -80,21 +81,37 @@ resource "aws_subnet" "private_data" {
   }
 }
 
-# NAT Gateway
+# Firewall subnets
+resource "aws_subnet" "firewall" {
+  count = length(var.availability_zones)
+
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = local.firewall_cidrs[count.index]
+  availability_zone = local.azs[count.index]
+
+  tags = {
+    Name = "${local.name_prefix}-firewall-subnet-${var.availability_zones[count.index]}"
+    Type = "firewall"
+  }
+}
+
+# NAT Gateways
 resource "aws_eip" "nat" {
+  count  = length(var.availability_zones)
   domain = "vpc"
 
   tags = {
-    Name = "${local.name_prefix}-nat-eip"
+    Name = "${local.name_prefix}-nat-eip-${var.availability_zones[count.index]}"
   }
 }
 
 resource "aws_nat_gateway" "main" {
-  allocation_id = aws_eip.nat.id
-  subnet_id     = aws_subnet.public[0].id
+  count         = length(var.availability_zones)
+  allocation_id = aws_eip.nat[count.index].id
+  subnet_id     = aws_subnet.public[count.index].id
 
   tags = {
-    Name = "${local.name_prefix}-nat"
+    Name = "${local.name_prefix}-nat-${var.availability_zones[count.index]}"
   }
 
   depends_on = [aws_internet_gateway.main]
@@ -127,9 +144,13 @@ resource "aws_route_table" "private_app" {
 
   vpc_id = aws_vpc.main.id
 
-  route {
-    cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.main.id
+  dynamic "route" {
+    for_each = var.network_firewall_enabled ? [] : [1]
+
+    content {
+      cidr_block     = "0.0.0.0/0"
+      nat_gateway_id = aws_nat_gateway.main[count.index].id
+    }
   }
 
   tags = {
@@ -150,9 +171,13 @@ resource "aws_route_table" "private_data" {
 
   vpc_id = aws_vpc.main.id
 
-  route {
-    cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.main.id
+  dynamic "route" {
+    for_each = var.network_firewall_enabled ? [] : [1]
+
+    content {
+      cidr_block     = "0.0.0.0/0"
+      nat_gateway_id = aws_nat_gateway.main[count.index].id
+    }
   }
 
   tags = {
@@ -165,6 +190,28 @@ resource "aws_route_table_association" "private_data" {
 
   subnet_id      = aws_subnet.private_data[count.index].id
   route_table_id = aws_route_table.private_data[count.index].id
+}
+
+resource "aws_route_table" "firewall" {
+  count = length(var.availability_zones)
+
+  vpc_id = aws_vpc.main.id
+
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.main[count.index].id
+  }
+
+  tags = {
+    Name = "${local.name_prefix}-firewall-rt-${var.availability_zones[count.index]}"
+  }
+}
+
+resource "aws_route_table_association" "firewall" {
+  count = length(var.availability_zones)
+
+  subnet_id      = aws_subnet.firewall[count.index].id
+  route_table_id = aws_route_table.firewall[count.index].id
 }
 
 # S3 gateway endpoint on private route tables
@@ -285,5 +332,70 @@ resource "aws_vpc_endpoint" "sts" {
 
   tags = {
     Name = "${local.name_prefix}-sts-endpoint"
+  }
+}
+
+resource "aws_cloudwatch_log_group" "vpc_flow_logs" {
+  name              = "/aws/vpc/flow-logs/${local.name_prefix}"
+  retention_in_days = 30
+
+  tags = {
+    Name = "${local.name_prefix}-vpc-flow-logs"
+  }
+}
+
+resource "aws_iam_role" "flow_logs" {
+  name = "${local.name_prefix}-vpc-flow-logs-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "vpc-flow-logs.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  tags = {
+    Name = "${local.name_prefix}-vpc-flow-logs-role"
+  }
+}
+
+resource "aws_iam_role_policy" "flow_logs" {
+  name = "${local.name_prefix}-vpc-flow-logs"
+  role = aws_iam_role.flow_logs.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+          "logs:DescribeLogGroups",
+          "logs:DescribeLogStreams"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_flow_log" "vpc" {
+  iam_role_arn             = aws_iam_role.flow_logs.arn
+  log_destination          = aws_cloudwatch_log_group.vpc_flow_logs.arn
+  log_destination_type     = "cloud-watch-logs"
+  traffic_type             = "ALL"
+  vpc_id                   = aws_vpc.main.id
+  max_aggregation_interval = 60
+
+  tags = {
+    Name = "${local.name_prefix}-vpc-flow-logs"
   }
 }

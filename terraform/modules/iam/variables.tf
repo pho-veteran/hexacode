@@ -24,6 +24,16 @@ variable "judge_queue_arn" {
   type        = string
 }
 
+variable "efs_file_system_arn" {
+  description = "ARN of the submission artifacts EFS file system"
+  type        = string
+}
+
+variable "efs_access_point_arn" {
+  description = "ARN of the submission artifacts EFS access point"
+  type        = string
+}
+
 variable "kms_key_arn" {
   description = "KMS key ARN for Secrets Manager if CMK-backed"
   type        = string

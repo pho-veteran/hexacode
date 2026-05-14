@@ -10,21 +10,21 @@ Amazon ECR is AWS's private Docker image registry. You build Docker images local
 
 ## What Goes To ECR In This Repo
 
-Push these backend images to the shared repository named by Terraform `ecr_repository_name`, defaulting to `prod/hexacode`:
+Push these backend images to the repository named by Terraform `ecr_repository_name`. The existing live production stack uses `prod/hexacode`; the W5 dev stack uses `dev/hexacode` so dev image pushes cannot affect prod tasks:
 
 - `identity-service`
 - `problem-service`
 - `submission-service`
 - `worker`
 
-Because all four services share one repository, image tags include the service name:
+Because all four services share one repository per environment, image tags include the service name:
 
-- `identity-service-abc1234`
-- `problem-service-abc1234`
-- `submission-service-abc1234`
-- `worker-abc1234`
+- `identity-service-dev-abc1234`
+- `problem-service-dev-abc1234`
+- `submission-service-dev-abc1234`
+- `worker-dev-abc1234`
 
-Do not use ECR for the production frontend. Build the frontend as static files and deploy it to S3 + CloudFront.
+Do not use ECR for the frontend. Build the frontend as static files and deploy it to S3 + CloudFront.
 
 ## Before You Start
 
@@ -43,7 +43,7 @@ aws configure get region
 docker version
 ```
 
-For the current production target, use `us-west-2` unless the deployment owner intentionally changes `terraform.tfvars`.
+For the W5 dev target, use `us-west-2`, `terraform/terraform-dev.tfvars`, and `dev/hexacode`. Do not use the production `terraform.tfvars` or `prod/hexacode` repository for W5 debugging unless the deployment owner explicitly changes the target.
 
 ## Required IAM Permissions
 
@@ -77,8 +77,8 @@ From the repo root:
 
 ```powershell
 $env:AWS_REGION = "us-west-2"
-$env:IMAGE_TAG = (git rev-parse --short HEAD).Trim()
-powershell -ExecutionPolicy Bypass -File scripts/push-ecr.ps1 -Region $env:AWS_REGION -TagSuffix $env:IMAGE_TAG
+$env:IMAGE_TAG = "dev-$((git rev-parse --short HEAD).Trim())"
+powershell -ExecutionPolicy Bypass -File scripts/push-ecr.ps1 -Region $env:AWS_REGION -Repository "dev/hexacode" -TagSuffix $env:IMAGE_TAG
 ```
 
 Push only one service:
@@ -96,7 +96,8 @@ powershell -ExecutionPolicy Bypass -File scripts/push-ecr.ps1 -Region $env:AWS_R
 The script:
 
 - reads the target account with `aws sts get-caller-identity`
-- uses the shared ECR repository `prod/hexacode` unless overridden
+- uses the ECR repository passed with `-Repository`, defaulting to `prod/hexacode` only for production-compatible calls
+- for W5 dev, pass `-Repository "dev/hexacode"` and use a `dev-` tag suffix
 - builds each backend service with the correct context; `problem-service` uses the repo root so the seed catalog is packaged
 - tags images as `<service>-<tagSuffix>`
 - logs Docker into ECR unless you pass `-SkipLogin`
@@ -115,7 +116,7 @@ Set common values:
 $env:AWS_REGION = "us-west-2"
 $ACCOUNT_ID = (aws sts get-caller-identity --query Account --output text).Trim()
 $GIT_SHA = (git rev-parse --short HEAD).Trim()
-$REPOSITORY = "prod/hexacode"
+$REPOSITORY = "dev/hexacode"
 ```
 
 Confirm the Terraform-managed repository exists:
@@ -171,15 +172,15 @@ aws ecr describe-images `
 Expected image URI shape:
 
 ```text
-198306925854.dkr.ecr.us-west-2.amazonaws.com/prod/hexacode:problem-service-abc1234
+198306925854.dkr.ecr.us-west-2.amazonaws.com/dev/hexacode:problem-service-dev-abc1234
 ```
 
 That means:
 
 - AWS account: `198306925854` for the current production target; use your own account ID for other deployments
 - region: `us-west-2`
-- ECR repository: `prod/hexacode`
-- tag: `problem-service-abc1234`
+- ECR repository: `dev/hexacode` for W5 dev, `prod/hexacode` only for the existing production stack
+- tag: `problem-service-dev-abc1234`
 
 ## Common Errors
 

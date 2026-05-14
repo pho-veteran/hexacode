@@ -28,7 +28,7 @@ resource "aws_security_group" "internal_alb" {
   }
 }
 
-# sg_api_services - attached to ECS services (identity, problem, submission)
+# sg_api_services - attached to identity and problem ECS services
 resource "aws_security_group" "api_services" {
   name        = "${local.name_prefix}-sg-api-services"
   description = "Security group for API services (identity, problem, submission)"
@@ -36,6 +36,16 @@ resource "aws_security_group" "api_services" {
 
   tags = {
     Name = "${local.name_prefix}-sg-api-services"
+  }
+}
+
+resource "aws_security_group" "submission_service" {
+  name        = "${local.name_prefix}-sg-submission-service"
+  description = "Security group for submission API service"
+  vpc_id      = var.vpc_id
+
+  tags = {
+    Name = "${local.name_prefix}-sg-submission-service"
   }
 }
 
@@ -95,6 +105,16 @@ resource "aws_security_group" "redis" {
   }
 }
 
+resource "aws_security_group" "efs" {
+  name        = "${local.name_prefix}-sg-efs"
+  description = "Security group for EFS submission artifacts"
+  vpc_id      = var.vpc_id
+
+  tags = {
+    Name = "${local.name_prefix}-sg-efs"
+  }
+}
+
 # ============================================================================
 # Ingress Rules
 # ============================================================================
@@ -119,6 +139,15 @@ resource "aws_vpc_security_group_ingress_rule" "internal_alb_from_api_services" 
   description                  = "HTTP from API services"
 }
 
+resource "aws_vpc_security_group_ingress_rule" "internal_alb_from_submission_service" {
+  security_group_id            = aws_security_group.internal_alb.id
+  referenced_security_group_id = aws_security_group.submission_service.id
+  from_port                    = 80
+  to_port                      = 80
+  ip_protocol                  = "tcp"
+  description                  = "HTTP from submission service"
+}
+
 # sg_internal_alb: HTTP from worker
 resource "aws_vpc_security_group_ingress_rule" "internal_alb_from_worker" {
   security_group_id            = aws_security_group.internal_alb.id
@@ -132,6 +161,15 @@ resource "aws_vpc_security_group_ingress_rule" "internal_alb_from_worker" {
 # sg_api_services: HTTP from internal ALB
 resource "aws_vpc_security_group_ingress_rule" "api_services_from_internal_alb" {
   security_group_id            = aws_security_group.api_services.id
+  referenced_security_group_id = aws_security_group.internal_alb.id
+  from_port                    = 8000
+  to_port                      = 8000
+  ip_protocol                  = "tcp"
+  description                  = "HTTP from internal ALB"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "submission_service_from_internal_alb" {
+  security_group_id            = aws_security_group.submission_service.id
   referenced_security_group_id = aws_security_group.internal_alb.id
   from_port                    = 8000
   to_port                      = 8000
@@ -159,6 +197,15 @@ resource "aws_vpc_security_group_ingress_rule" "rds_proxy_from_api_services" {
   description                  = "PostgreSQL from API services"
 }
 
+resource "aws_vpc_security_group_ingress_rule" "rds_proxy_from_submission_service" {
+  security_group_id            = aws_security_group.rds_proxy.id
+  referenced_security_group_id = aws_security_group.submission_service.id
+  from_port                    = 5432
+  to_port                      = 5432
+  ip_protocol                  = "tcp"
+  description                  = "PostgreSQL from submission service"
+}
+
 # sg_redis: Redis from API services
 resource "aws_vpc_security_group_ingress_rule" "redis_from_api_services" {
   security_group_id            = aws_security_group.redis.id
@@ -178,6 +225,24 @@ resource "aws_vpc_security_group_ingress_rule" "rds_proxy_from_client_vpn" {
   to_port                      = 5432
   ip_protocol                  = "tcp"
   description                  = "PostgreSQL from Client VPN to RDS Proxy"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "efs_from_submission_service" {
+  security_group_id            = aws_security_group.efs.id
+  referenced_security_group_id = aws_security_group.submission_service.id
+  from_port                    = 2049
+  to_port                      = 2049
+  ip_protocol                  = "tcp"
+  description                  = "NFS from submission service tasks"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "efs_from_worker" {
+  security_group_id            = aws_security_group.efs.id
+  referenced_security_group_id = aws_security_group.worker.id
+  from_port                    = 2049
+  to_port                      = 2049
+  ip_protocol                  = "tcp"
+  description                  = "NFS from worker tasks"
 }
 
 # ============================================================================
@@ -202,6 +267,15 @@ resource "aws_vpc_security_group_egress_rule" "internal_alb_to_api_services" {
   to_port                      = 8000
   ip_protocol                  = "tcp"
   description                  = "HTTP to API services"
+}
+
+resource "aws_vpc_security_group_egress_rule" "internal_alb_to_submission_service" {
+  security_group_id            = aws_security_group.internal_alb.id
+  referenced_security_group_id = aws_security_group.submission_service.id
+  from_port                    = 8000
+  to_port                      = 8000
+  ip_protocol                  = "tcp"
+  description                  = "HTTP to submission service"
 }
 
 # sg_api_services: PostgreSQL to RDS proxy
@@ -244,6 +318,15 @@ resource "aws_vpc_security_group_egress_rule" "api_services_to_internal_alb" {
   description                  = "HTTP to internal ALB"
 }
 
+resource "aws_vpc_security_group_egress_rule" "submission_service_to_internal_alb" {
+  security_group_id            = aws_security_group.submission_service.id
+  referenced_security_group_id = aws_security_group.internal_alb.id
+  from_port                    = 80
+  to_port                      = 80
+  ip_protocol                  = "tcp"
+  description                  = "HTTP to internal ALB"
+}
+
 # sg_api_services: HTTPS to internet
 resource "aws_vpc_security_group_egress_rule" "api_services_to_internet" {
   security_group_id = aws_security_group.api_services.id
@@ -252,6 +335,33 @@ resource "aws_vpc_security_group_egress_rule" "api_services_to_internet" {
   to_port           = 443
   ip_protocol       = "tcp"
   description       = "HTTPS to internet"
+}
+
+resource "aws_vpc_security_group_egress_rule" "submission_service_to_internet" {
+  security_group_id = aws_security_group.submission_service.id
+  cidr_ipv4         = "0.0.0.0/0"
+  from_port         = 443
+  to_port           = 443
+  ip_protocol       = "tcp"
+  description       = "HTTPS to internet"
+}
+
+resource "aws_vpc_security_group_egress_rule" "submission_service_to_rds_proxy" {
+  security_group_id            = aws_security_group.submission_service.id
+  referenced_security_group_id = aws_security_group.rds_proxy.id
+  from_port                    = 5432
+  to_port                      = 5432
+  ip_protocol                  = "tcp"
+  description                  = "PostgreSQL to RDS proxy"
+}
+
+resource "aws_vpc_security_group_egress_rule" "submission_service_to_efs" {
+  security_group_id            = aws_security_group.submission_service.id
+  referenced_security_group_id = aws_security_group.efs.id
+  from_port                    = 2049
+  to_port                      = 2049
+  ip_protocol                  = "tcp"
+  description                  = "NFS to EFS submission artifacts"
 }
 
 # sg_worker: HTTP to internal ALB
@@ -272,6 +382,15 @@ resource "aws_vpc_security_group_egress_rule" "worker_to_internet" {
   to_port           = 443
   ip_protocol       = "tcp"
   description       = "HTTPS to internet"
+}
+
+resource "aws_vpc_security_group_egress_rule" "worker_to_efs" {
+  security_group_id            = aws_security_group.worker.id
+  referenced_security_group_id = aws_security_group.efs.id
+  from_port                    = 2049
+  to_port                      = 2049
+  ip_protocol                  = "tcp"
+  description                  = "NFS to EFS submission artifacts"
 }
 
 # sg_client_vpn: PostgreSQL to RDS Proxy

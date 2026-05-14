@@ -190,6 +190,9 @@ create table if not exists storage.objects (
   size_bytes bigint not null check (size_bytes >= 0),
   sha256 text check (sha256 is null or sha256 ~ '^[0-9A-Fa-f]{64}$'),
   etag text,
+  storage_driver text not null default 's3',
+  filesystem_path text,
+  artifact_kind text,
   metadata_json jsonb not null default '{}'::jsonb,
   uploaded_by_user_id uuid references app_identity.users(id) on delete set null,
   created_at timestamptz not null default now(),
@@ -197,8 +200,13 @@ create table if not exists storage.objects (
   constraint uq_storage_objects_bucket_key unique (bucket, object_key)
 );
 
+alter table if exists storage.objects
+  add column if not exists storage_driver text not null default 's3',
+  add column if not exists filesystem_path text,
+  add column if not exists artifact_kind text;
+
 comment on table storage.objects is
-  'Logical object metadata for the shared S3-compatible storage contract used by MinIO locally and S3 in cloud.';
+  'Logical object metadata for shared storage. Submission artifacts may use S3-compatible object storage or EFS-backed filesystem paths.';
 
 create index if not exists ix_storage_objects_sha256
   on storage.objects (sha256)

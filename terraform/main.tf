@@ -10,12 +10,26 @@ provider "aws" {
   }
 }
 
+provider "aws" {
+  alias  = "us_east_1"
+  region = "us-east-1"
+
+  default_tags {
+    tags = {
+      Project     = "hexacode"
+      Environment = var.environment
+      ManagedBy   = "terraform"
+    }
+  }
+}
+
 module "vpc" {
-  source             = "./modules/vpc"
-  environment        = var.environment
-  region             = var.region
-  vpc_cidr           = var.cidr_block
-  availability_zones = var.availability_zones
+  source                   = "./modules/vpc"
+  environment              = var.environment
+  region                   = var.region
+  vpc_cidr                 = var.cidr_block
+  availability_zones       = var.availability_zones
+  network_firewall_enabled = true
 }
 
 module "security_groups" {
@@ -44,6 +58,13 @@ module "s3_buckets" {
   environment = var.environment
 }
 
+module "efs" {
+  source                  = "./modules/efs"
+  environment             = var.environment
+  private_data_subnet_ids = module.vpc.private_data_subnet_ids
+  security_group_id       = module.security_groups.sg_efs_id
+}
+
 module "sqs" {
   source      = "./modules/sqs"
   environment = var.environment
@@ -56,13 +77,26 @@ module "ecr" {
 }
 
 module "rds" {
-  source                  = "./modules/rds"
-  environment             = var.environment
-  db_instance_class       = var.db_instance_class
-  db_allocated_storage    = var.db_allocated_storage
-  db_multi_az             = var.db_multi_az
-  private_data_subnet_ids = module.vpc.private_data_subnet_ids
-  rds_security_group_id   = module.security_groups.sg_rds_id
+  source                    = "./modules/rds"
+  environment               = var.environment
+  db_instance_class         = var.db_instance_class
+  db_allocated_storage      = var.db_allocated_storage
+  db_multi_az               = var.db_multi_az
+  private_data_subnet_ids   = module.vpc.private_data_subnet_ids
+  rds_security_group_id     = module.security_groups.sg_rds_id
+  deletion_protection       = var.rds_deletion_protection
+  skip_final_snapshot       = var.rds_skip_final_snapshot
+  final_snapshot_identifier = var.rds_final_snapshot_identifier
+}
+
+module "backup" {
+  source                = "./modules/backup"
+  environment           = var.environment
+  backup_vault_name     = "hexacode-${var.environment}-backup-vault"
+  backup_plan_name      = "hexacode-${var.environment}-daily-backups"
+  backup_selection_name = "hexacode-${var.environment}-protected-resources"
+  rds_instance_arn      = module.rds.db_instance_arn
+  efs_file_system_arns  = concat([module.efs.file_system_arn], var.backup_efs_file_system_arns)
 }
 
 module "rds_proxy" {
@@ -88,6 +122,8 @@ module "iam" {
   problem_bucket_arn     = module.s3_buckets.problem_bucket_arn
   submission_bucket_arn  = module.s3_buckets.submission_bucket_arn
   judge_queue_arn        = module.sqs.judge_queue_arn
+  efs_file_system_arn    = module.efs.file_system_arn
+  efs_access_point_arn   = module.efs.access_point_arn
   kms_key_arn            = var.kms_key_arn
 }
 
@@ -125,16 +161,58 @@ module "bedrock_chat" {
   knowledge_source_bucket_arn = module.s3_buckets.problem_bucket_arn
 }
 
+module "waf" {
+  source      = "./modules/waf"
+  environment = var.environment
+
+  providers = {
+    aws.us_east_1 = aws.us_east_1
+  }
+}
+
+resource "aws_wafv2_web_acl_association" "internal_alb" {
+  resource_arn = module.alb.internal_alb_arn
+  web_acl_arn  = module.waf.regional_web_acl_arn
+}
+
 module "api_gateway" {
-  source                    = "./modules/api-gateway"
-  environment               = var.environment
-  frontend_domain           = var.frontend_domain
-  private_app_subnet_ids    = module.vpc.private_app_subnet_ids
-  sg_apigw_vpclink_id       = module.security_groups.sg_apigw_vpclink_id
-  internal_alb_listener_arn = module.alb.internal_alb_listener_arn
-  chat_lambda_arn           = var.chat_lambda_arn != "" ? var.chat_lambda_arn : module.bedrock_chat.chat_lambda_arn
-  chat_lambda_enabled       = true
-  cors_lambda_arn           = module.cors_lambda.cors_lambda_arn
+  source                         = "./modules/api-gateway"
+  environment                    = var.environment
+  frontend_domain                = var.frontend_domain
+  private_app_subnet_ids         = module.vpc.private_app_subnet_ids
+  sg_apigw_vpclink_id            = module.security_groups.sg_apigw_vpclink_id
+  internal_alb_listener_arn      = module.alb.internal_alb_listener_arn
+  chat_lambda_arn                = module.bedrock_chat.chat_lambda_arn
+  chat_lambda_enabled            = true
+  chat_lambda_permission_managed = true
+  cognito_issuer                 = module.cognito.issuer
+  cognito_client_id              = module.cognito.app_client_id
+  cors_lambda_arn                = module.cors_lambda.cors_lambda_arn
+}
+
+module "network_firewall" {
+  source                  = "./modules/network-firewall"
+  environment             = var.environment
+  vpc_id                  = module.vpc.vpc_id
+  firewall_subnet_ids     = module.vpc.firewall_subnet_ids
+  availability_zone_names = module.vpc.availability_zone_names
+  blocked_domains         = var.network_firewall_blocked_domains
+}
+
+resource "aws_route" "private_app_to_firewall" {
+  for_each = module.network_firewall.endpoint_ids_by_az
+
+  route_table_id         = module.vpc.private_app_route_table_ids[index(module.vpc.availability_zone_names, each.key)]
+  destination_cidr_block = "0.0.0.0/0"
+  vpc_endpoint_id        = each.value
+}
+
+resource "aws_route" "private_data_to_firewall" {
+  for_each = module.network_firewall.endpoint_ids_by_az
+
+  route_table_id         = module.vpc.private_data_route_table_ids[index(module.vpc.availability_zone_names, each.key)]
+  destination_cidr_block = "0.0.0.0/0"
+  vpc_endpoint_id        = each.value
 }
 
 module "cloudfront" {
@@ -143,6 +221,7 @@ module "cloudfront" {
   region               = var.region
   frontend_bucket_name = module.s3_buckets.frontend_bucket_name
   frontend_bucket_arn  = module.s3_buckets.frontend_bucket_arn
+  web_acl_id           = module.waf.cloudfront_web_acl_arn
 }
 
 module "ecs_services" {
@@ -160,6 +239,7 @@ module "ecs_services" {
   tg_submission_arn         = module.alb.tg_submission_arn
   private_app_subnet_ids    = module.vpc.private_app_subnet_ids
   sg_api_services_id        = module.security_groups.sg_api_services_id
+  sg_submission_service_id  = module.security_groups.sg_submission_service_id
   sg_worker_id              = module.security_groups.sg_worker_id
   application_secret_arn    = local.effective_application_secret_arn
   ecr_repository_url        = module.ecr.repository_url
@@ -170,6 +250,8 @@ module "ecs_services" {
   cognito_jwks_url          = module.cognito.jwks_url
   problem_bucket_name       = module.s3_buckets.problem_bucket_name
   submission_bucket_name    = module.s3_buckets.submission_bucket_name
+  efs_file_system_id        = module.efs.file_system_id
+  efs_access_point_id       = module.efs.access_point_id
   judge_queue_url           = module.sqs.judge_queue_url
   internal_alb_dns_name     = module.alb.internal_alb_dns_name
   internal_service_base_url = "http://${module.alb.internal_alb_dns_name}"

@@ -160,6 +160,56 @@ output "db_master_user_secret_arn" {
   value       = module.rds.db_master_user_secret_arn
 }
 
+output "db_instance_arn" {
+  description = "ARN of the RDS instance"
+  value       = module.rds.db_instance_arn
+}
+
+output "backup_vault_name" {
+  description = "Name of the AWS Backup vault"
+  value       = module.backup.backup_vault_name
+}
+
+output "backup_vault_arn" {
+  description = "ARN of the AWS Backup vault"
+  value       = module.backup.backup_vault_arn
+}
+
+output "backup_plan_name" {
+  description = "Name of the AWS Backup plan"
+  value       = module.backup.backup_plan_name
+}
+
+output "backup_plan_arn" {
+  description = "ARN of the AWS Backup plan"
+  value       = module.backup.backup_plan_arn
+}
+
+output "backup_failure_event_rule_arn" {
+  description = "EventBridge rule ARN for AWS Backup failure event routing"
+  value       = module.backup.backup_failure_event_rule_arn
+}
+
+output "backup_failure_log_group_name" {
+  description = "CloudWatch log group name for AWS Backup failure events"
+  value       = module.backup.backup_failure_log_group_name
+}
+
+output "backup_failure_alarm_name" {
+  description = "CloudWatch alarm name for AWS Backup job failures"
+  value       = module.backup.backup_failure_alarm_name
+}
+
+output "backup_failure_alarm_arn" {
+  description = "CloudWatch alarm ARN for AWS Backup job failures"
+  value       = module.backup.backup_failure_alarm_arn
+}
+
+output "backup_failure_topic_arn" {
+  description = "SNS topic ARN for AWS Backup failure notifications"
+  value       = module.backup.backup_failure_topic_arn
+}
+
 output "db_proxy_endpoint" {
   description = "Endpoint for the RDS proxy"
   value       = module.rds_proxy.proxy_endpoint
@@ -293,7 +343,7 @@ output "cors_lambda_arn" {
 
 # Bedrock Chat Outputs
 output "chat_lambda_arn" {
-  description = "ARN of the Bedrock-backed chat Lambda function"
+  description = "ARN of the Terraform-managed Bedrock chat Lambda function"
   value       = module.bedrock_chat.chat_lambda_arn
 }
 
@@ -331,6 +381,52 @@ output "api_gateway_id" {
 output "vpc_link_id" {
   description = "ID of the VPC Link"
   value       = module.api_gateway.vpc_link_id
+}
+
+# WAF and Network Outputs
+output "cloudfront_web_acl_arn" {
+  description = "ARN of the CloudFront-scope WAF web ACL"
+  value       = module.waf.cloudfront_web_acl_arn
+}
+
+output "regional_web_acl_arn" {
+  description = "ARN of the regional WAF web ACL associated with the internal ALB"
+  value       = module.waf.regional_web_acl_arn
+}
+
+output "network_firewall_arn" {
+  description = "ARN of the AWS Network Firewall"
+  value       = module.network_firewall.firewall_arn
+}
+
+output "network_firewall_name" {
+  description = "Name of the AWS Network Firewall"
+  value       = module.network_firewall.firewall_name
+}
+
+output "network_firewall_flow_log_group_name" {
+  description = "CloudWatch log group name for Network Firewall flow logs"
+  value       = module.network_firewall.flow_log_group_name
+}
+
+output "network_firewall_alert_log_group_name" {
+  description = "CloudWatch log group name for Network Firewall alert logs"
+  value       = module.network_firewall.alert_log_group_name
+}
+
+output "vpc_flow_log_group_name" {
+  description = "CloudWatch log group name for VPC Flow Logs"
+  value       = module.vpc.vpc_flow_log_group_name
+}
+
+output "firewall_subnet_ids" {
+  description = "IDs of dedicated Network Firewall subnets"
+  value       = module.vpc.firewall_subnet_ids
+}
+
+output "nat_gateway_ids" {
+  description = "IDs of Regional NAT gateways, one per Availability Zone"
+  value       = module.vpc.nat_gateway_ids
 }
 
 # CloudFront Outputs

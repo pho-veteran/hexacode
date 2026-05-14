@@ -11,6 +11,11 @@ resource "aws_db_subnet_group" "main" {
   }
 }
 
+locals {
+  final_snapshot_required   = var.environment == "prod" || !var.skip_final_snapshot
+  final_snapshot_identifier = local.final_snapshot_required ? trimspace(var.final_snapshot_identifier) : null
+}
+
 resource "aws_db_instance" "main" {
   identifier        = "hexacode-${var.environment}-db"
   engine            = "postgres"
@@ -35,11 +40,19 @@ resource "aws_db_instance" "main" {
   backup_window           = "03:00-04:00"
   maintenance_window      = "mon:04:00-mon:05:00"
 
-  skip_final_snapshot = true
-  deletion_protection = false
+  skip_final_snapshot       = var.environment == "prod" ? false : var.skip_final_snapshot
+  deletion_protection       = var.environment == "prod" ? true : var.deletion_protection
+  final_snapshot_identifier = local.final_snapshot_required ? local.final_snapshot_identifier : null
 
   tags = {
     Name        = "hexacode-${var.environment}-db"
     Environment = var.environment
+  }
+
+  lifecycle {
+    precondition {
+      condition     = !local.final_snapshot_required || trimspace(var.final_snapshot_identifier) != ""
+      error_message = "final_snapshot_identifier must be set to a unique value when final snapshots are required."
+    }
   }
 }

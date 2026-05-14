@@ -9,6 +9,7 @@ import shlex
 import subprocess
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 import hashlib
@@ -63,8 +64,8 @@ def notify_submission_service(
     payload: dict[str, Any],
     *,
     trace_id: str,
-) -> None:
-    request_service(
+) -> dict[str, Any]:
+    return request_service(
         submission_service_url,
         path,
         method="POST",
@@ -137,6 +138,42 @@ def preview_bytes(data: bytes | None, *, limit: int = OUTPUT_PREVIEW_BYTES) -> s
     if len(data) > limit:
         return f"{text}\n...[truncated]"
     return text
+
+
+def persist_worker_artifact(
+    *,
+    submission_id: str,
+    relative_path: str,
+    artifact_kind: str,
+    data: bytes | None,
+    content_type: str = "text/plain; charset=utf-8",
+) -> dict[str, Any] | None:
+    if not data:
+        return None
+    bucket = SETTINGS.storage.submissions_bucket
+    if not bucket:
+        raise RuntimeError("S3_BUCKET_SUBMISSIONS must be configured for submission artifacts.")
+
+    object_key = f"submissions/{submission_id}/{relative_path}"
+    upload_result = upload_object_bytes(
+        SETTINGS.storage,
+        bucket=bucket,
+        object_key=object_key,
+        data=data,
+        content_type=content_type,
+        metadata={"artifact_kind": artifact_kind, "submission_id": submission_id},
+        tags={"artifact_kind": artifact_kind},
+    )
+    return {
+        "bucket": bucket,
+        "object_key": object_key,
+        "content_type": content_type,
+        "original_filename": object_key.rsplit("/", 1)[-1],
+        "size_bytes": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "etag": upload_result.get("etag"),
+        "metadata_json": {"artifact_kind": artifact_kind, "submission_id": submission_id},
+    }
 
 
 def normalize_diff_bytes(data: bytes) -> bytes:
@@ -429,18 +466,49 @@ def cache_compiled_checker_artifact(
 
 def load_submission_source_bytes(submission_context: dict[str, Any]) -> bytes:
     submission = submission_context["submission"]
+    source_object = submission.get("source_object")
+    if source_object is not None:
+        return download_object_bytes(
+            SETTINGS.storage,
+            bucket=source_object["bucket"],
+            object_key=source_object["object_key"],
+        )
+
     if submission.get("source_code") is not None:
         return str(submission["source_code"]).encode("utf-8")
 
-    source_object = submission.get("source_object")
-    if source_object is None:
-        raise RuntimeError("Submission context did not include source_code or source_object.")
+    raise RuntimeError("Submission context did not include source_code or source_object.")
 
-    return download_object_bytes(
-        SETTINGS.storage,
-        bucket=source_object["bucket"],
-        object_key=source_object["object_key"],
+
+def attach_result_artifacts(
+    *,
+    submission_id: str,
+    result: dict[str, Any],
+    output_prefix: str,
+    stdout_bytes: bytes | None,
+    stderr_bytes: bytes | None,
+) -> dict[str, Any]:
+    stdout_artifact = persist_worker_artifact(
+        submission_id=submission_id,
+        relative_path=f"{output_prefix}/stdout.txt",
+        artifact_kind="stdout",
+        data=stdout_bytes,
     )
+    stderr_artifact = persist_worker_artifact(
+        submission_id=submission_id,
+        relative_path=f"{output_prefix}/stderr.txt",
+        artifact_kind="stderr",
+        data=stderr_bytes,
+    )
+    if stdout_artifact is None and stderr_artifact is None:
+        return result
+
+    enriched = dict(result)
+    if stdout_artifact is not None:
+        enriched["stdout_artifact"] = stdout_artifact
+    if stderr_artifact is not None:
+        enriched["stderr_artifact"] = stderr_artifact
+    return enriched
 
 
 def load_checker_source_bytes(checker: dict[str, Any]) -> bytes:
@@ -984,6 +1052,7 @@ def build_completion_payload(
     testcase_results: list[dict[str, Any]],
     final_verdict: str,
     final_status: str,
+    compile_log_artifact: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     testcase_runtime_ms = [
         int(result.get("runtime_ms") or 0)
@@ -995,7 +1064,7 @@ def build_completion_payload(
         for result in testcase_results
         if result.get("status_code") not in {"skipped"}
     ]
-    return {
+    payload = {
         "worker_name": worker_name,
         "status_code": final_status,
         "verdict_code": final_verdict,
@@ -1005,6 +1074,9 @@ def build_completion_payload(
         "compile_time_ms": compile_result.get("runtime_ms"),
         "results": [compile_result, *testcase_results],
     }
+    if compile_log_artifact is not None:
+        payload["compile_log_artifact"] = compile_log_artifact
+    return payload
 
 
 def execute_submission(
@@ -1019,6 +1091,7 @@ def execute_submission(
     checker = problem_context.get("active_checker") or {"checker_type_code": "diff"}
     submission = submission_context["submission"]
     runtime = submission_context["runtime"]
+    judge_run_id = str(submission_context.get("judge_run_id") or uuid.uuid4())
     checker_type_code = str(checker.get("checker_type_code", "diff")).strip().lower()
 
     with tempfile.TemporaryDirectory(prefix="hexacode-judge-") as workspace_dir:
@@ -1030,6 +1103,13 @@ def execute_submission(
             workspace=workspace,
             limits=limits,
         )
+        compile_log_text = compile_result.get("checker_message")
+        compile_log_artifact = persist_worker_artifact(
+            submission_id=str(submission["id"]),
+            relative_path=f"runs/{judge_run_id}/compile.log",
+            artifact_kind="compile_log",
+            data=str(compile_log_text).encode("utf-8") if compile_log_text else None,
+        )
         if compile_result["status_code"] != "ac":
             final_verdict = compile_result["status_code"]
             final_status = "failed" if final_verdict == "ie" else "done"
@@ -1039,6 +1119,7 @@ def execute_submission(
                 testcase_results=[],
                 final_verdict=final_verdict,
                 final_status=final_status,
+                compile_log_artifact=compile_log_artifact,
             )
 
         run_command = submission_runtime_plan["run_command"]
@@ -1067,6 +1148,7 @@ def execute_submission(
                 testcase_results=[],
                 final_verdict="ie",
                 final_status="failed",
+                compile_log_artifact=compile_log_artifact,
             )
         if submission_kind_code == "run" and not should_run_testcases and not should_run_custom:
             return build_completion_payload(
@@ -1079,6 +1161,7 @@ def execute_submission(
                 testcase_results=[],
                 final_verdict="ie",
                 final_status="failed",
+                compile_log_artifact=compile_log_artifact,
             )
 
         checker_runtime_plan: dict[str, str] | None = None
@@ -1096,6 +1179,7 @@ def execute_submission(
                     testcase_results=[],
                     final_verdict="ie",
                     final_status="failed",
+                    compile_log_artifact=compile_log_artifact,
                 )
 
             checker_workspace = workspace / "__checker__"
@@ -1145,6 +1229,7 @@ def execute_submission(
                         testcase_results=[],
                         final_verdict="ie",
                         final_status="failed",
+                        compile_log_artifact=compile_log_artifact,
                     )
                 try:
                     cached_object = cache_compiled_checker_artifact(
@@ -1202,6 +1287,13 @@ def execute_submission(
                         input_bytes=input_bytes,
                         expected_output=expected_output,
                     )
+                testcase_result = attach_result_artifacts(
+                    submission_id=str(submission["id"]),
+                    result=testcase_result,
+                    output_prefix=f"runs/{judge_run_id}/testcases/{testcase['id']}",
+                    stdout_bytes=execution["stdout"],
+                    stderr_bytes=execution["stderr"],
+                )
                 testcase_results.append(testcase_result)
                 if testcase_result["status_code"] != "ac" and final_verdict == "ac":
                     final_verdict = testcase_result["status_code"]
@@ -1223,6 +1315,13 @@ def execute_submission(
                     custom_case,
                     custom_execution,
                 )
+                custom_result = attach_result_artifacts(
+                    submission_id=str(submission["id"]),
+                    result=custom_result,
+                    output_prefix=f"runs/{judge_run_id}/custom-cases/{custom_case.get('id') or uuid.uuid4()}",
+                    stdout_bytes=custom_execution["stdout"],
+                    stderr_bytes=custom_execution["stderr"],
+                )
                 testcase_results.append(custom_result)
                 if custom_verdict != "ac" and final_verdict == "ac":
                     final_verdict = custom_verdict
@@ -1234,6 +1333,7 @@ def execute_submission(
             testcase_results=testcase_results,
             final_verdict=final_verdict,
             final_status=final_status,
+            compile_log_artifact=compile_log_artifact,
         )
 
 
@@ -1308,7 +1408,7 @@ def process_message(
         }
     limits = resolve_limits(submission_context, problem_context)
 
-    notify_submission_service(
+    started_response = notify_submission_service(
         submission_service_url,
         f"/internal/judge-jobs/{judge_message.judge_job_id}/started",
         {
@@ -1318,6 +1418,10 @@ def process_message(
         },
         trace_id=judge_message.trace_id,
     )
+    submission_context = {
+        **submission_context,
+        "judge_run_id": started_response.get("data", {}).get("judge_run_id"),
+    }
 
     try:
         completion_payload = execute_submission(

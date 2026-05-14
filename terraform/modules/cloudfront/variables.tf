@@ -17,3 +17,10 @@ variable "frontend_bucket_arn" {
   description = "ARN of the frontend S3 bucket"
   type        = string
 }
+
+variable "web_acl_id" {
+  description = "Optional AWS WAF web ACL ARN to associate with the CloudFront distribution."
+  type        = string
+  default     = null
+  nullable    = true
+}

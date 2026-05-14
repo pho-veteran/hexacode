@@ -20,3 +20,9 @@ variable "availability_zones" {
   type        = list(string)
   default     = ["a", "b"]
 }
+
+variable "network_firewall_enabled" {
+  description = "Route private subnet egress through AWS Network Firewall instead of directly to NAT gateways."
+  type        = bool
+  default     = false
+}

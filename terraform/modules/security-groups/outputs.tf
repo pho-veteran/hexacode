@@ -9,8 +9,13 @@ output "sg_internal_alb_id" {
 }
 
 output "sg_api_services_id" {
-  description = "Security group ID for API services"
+  description = "Security group ID for identity and problem API services"
   value       = aws_security_group.api_services.id
+}
+
+output "sg_submission_service_id" {
+  description = "Security group ID for submission API service"
+  value       = aws_security_group.submission_service.id
 }
 
 output "sg_worker_id" {
@@ -36,4 +41,9 @@ output "sg_redis_id" {
 output "sg_client_vpn_id" {
   description = "Security group ID for Client VPN"
   value       = try(aws_security_group.client_vpn[0].id, null)
+}
+
+output "sg_efs_id" {
+  description = "Security group ID for EFS submission artifacts"
+  value       = aws_security_group.efs.id
 }

@@ -433,14 +433,15 @@ resource "aws_iam_role_policy" "chat_lambda_bedrock" {
 }
 
 resource "aws_lambda_function" "chat" {
-  filename         = data.archive_file.chat_lambda_zip.output_path
-  function_name    = "${local.name_prefix}-chat"
-  role             = aws_iam_role.chat_lambda.arn
-  handler          = "index.handler"
-  source_code_hash = data.archive_file.chat_lambda_zip.output_base64sha256
-  runtime          = "python3.12"
-  timeout          = 30
-  memory_size      = 256
+  filename                       = data.archive_file.chat_lambda_zip.output_path
+  function_name                  = "${local.name_prefix}-chat"
+  role                           = aws_iam_role.chat_lambda.arn
+  handler                        = "index.handler"
+  source_code_hash               = data.archive_file.chat_lambda_zip.output_base64sha256
+  runtime                        = "python3.12"
+  timeout                        = var.chat_lambda_timeout_seconds
+  memory_size                    = 256
+  reserved_concurrent_executions = var.reserved_concurrent_executions
 
   environment {
     variables = {
@@ -452,5 +453,53 @@ resource "aws_lambda_function" "chat" {
 
   tags = {
     Name = "${local.name_prefix}-chat"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "chat_lambda_errors" {
+  alarm_name          = "${local.name_prefix}-chat-lambda-errors"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Errors"
+  namespace           = "AWS/Lambda"
+  period              = 60
+  statistic           = "Sum"
+  threshold           = var.chat_lambda_error_threshold
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.chat.function_name
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "chat_lambda_throttles" {
+  alarm_name          = "${local.name_prefix}-chat-lambda-throttles"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Throttles"
+  namespace           = "AWS/Lambda"
+  period              = 60
+  statistic           = "Sum"
+  threshold           = var.chat_lambda_throttle_threshold
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.chat.function_name
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "chat_lambda_duration_high" {
+  alarm_name          = "${local.name_prefix}-chat-lambda-duration-high"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Duration"
+  namespace           = "AWS/Lambda"
+  period              = 60
+  statistic           = "Average"
+  threshold           = var.chat_lambda_duration_threshold_ms
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.chat.function_name
   }
 }

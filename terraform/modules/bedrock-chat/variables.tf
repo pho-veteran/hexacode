@@ -35,3 +35,43 @@ variable "embedding_model_id" {
   type        = string
   default     = "amazon.titan-embed-text-v1"
 }
+
+variable "reserved_concurrent_executions" {
+  description = "Reserved concurrency for the chat Lambda"
+  type        = number
+  default     = 5
+}
+
+variable "chat_lambda_timeout_seconds" {
+  description = "Timeout for the chat Lambda in seconds"
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.chat_lambda_timeout_seconds > 0
+    error_message = "chat_lambda_timeout_seconds must be greater than 0."
+  }
+}
+
+variable "chat_lambda_error_threshold" {
+  description = "Alarm threshold for chat Lambda Errors"
+  type        = number
+  default     = 0
+}
+
+variable "chat_lambda_throttle_threshold" {
+  description = "Alarm threshold for chat Lambda Throttles"
+  type        = number
+  default     = 0
+}
+
+variable "chat_lambda_duration_threshold_ms" {
+  description = "Alarm threshold in milliseconds for high chat Lambda Duration. Keep this below the configured Lambda timeout."
+  type        = number
+  default     = 25000
+
+  validation {
+    condition     = var.chat_lambda_duration_threshold_ms > 0 && var.chat_lambda_duration_threshold_ms < (var.chat_lambda_timeout_seconds * 1000)
+    error_message = "chat_lambda_duration_threshold_ms must be greater than 0 and lower than chat_lambda_timeout_seconds converted to milliseconds."
+  }
+}

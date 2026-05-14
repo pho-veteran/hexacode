@@ -39,6 +39,63 @@ variable "db_allocated_storage" {
   default     = 100
 }
 
+variable "rds_deletion_protection" {
+  description = "Enable deletion protection for the RDS instance."
+  type        = bool
+  default     = true
+}
+
+variable "rds_skip_final_snapshot" {
+  description = "Skip the final snapshot when deleting the RDS instance."
+  type        = bool
+  default     = false
+}
+
+variable "rds_final_snapshot_identifier" {
+  description = "Unique final snapshot identifier to use for the RDS instance when snapshots are required. Must be updated for each destructive operation."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = trimspace(var.rds_final_snapshot_identifier) == "" || (
+      length(var.rds_final_snapshot_identifier) >= 1 &&
+      length(var.rds_final_snapshot_identifier) <= 255 &&
+      can(regex("^[A-Za-z][A-Za-z0-9-]*$", var.rds_final_snapshot_identifier)) &&
+      !can(regex("--", var.rds_final_snapshot_identifier)) &&
+      !endswith(var.rds_final_snapshot_identifier, "-")
+    )
+    error_message = "rds_final_snapshot_identifier must be empty or a valid RDS snapshot identifier: 1-255 chars, starts with a letter, contains only letters, numbers, and hyphens, with no trailing hyphen or double hyphen."
+  }
+}
+
+variable "backup_efs_file_system_arns" {
+  description = "Optional EFS filesystem ARNs to include in the AWS Backup selection."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition = alltrue([
+      for arn in var.backup_efs_file_system_arns :
+      trimspace(arn) != "" && can(regex("^arn:[^:]+:elasticfilesystem:[^:]+:[0-9]{12}:file-system/fs-[A-Za-z0-9]+$", arn))
+    ])
+    error_message = "backup_efs_file_system_arns must contain only EFS file system ARNs."
+  }
+}
+
+variable "network_firewall_blocked_domains" {
+  description = "Domains blocked by the Network Firewall denylist for W5 egress inspection evidence."
+  type        = list(string)
+  default     = ["example.com"]
+
+  validation {
+    condition = alltrue([
+      for domain in var.network_firewall_blocked_domains :
+      can(regex("^([A-Za-z0-9-]+\\.)+[A-Za-z]{2,}$", domain))
+    ])
+    error_message = "network_firewall_blocked_domains must contain DNS names such as example.com."
+  }
+}
+
 variable "application_secret_arn" {
   description = "Secrets Manager ARN that stores DATABASE_URL and REDIS_URL"
   type        = string
@@ -53,12 +110,6 @@ variable "ecr_repository_name" {
 
 variable "image_tag" {
   description = "Image tag to deploy"
-  type        = string
-  default     = ""
-}
-
-variable "chat_lambda_arn" {
-  description = "Optional external chat Lambda ARN. Leave empty to use Terraform-managed Bedrock chat."
   type        = string
   default     = ""
 }

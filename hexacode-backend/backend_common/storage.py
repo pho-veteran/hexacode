@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
@@ -27,6 +28,14 @@ def build_s3_client(settings: StorageSettings) -> BaseClient:
         aws_secret_access_key=settings.secret_access_key or None,
         config=config,
     )
+
+
+def resolve_efs_object_path(root: str, bucket: str, object_key: str) -> Path:
+    bucket_base = (Path(root) / bucket).resolve()
+    candidate = (bucket_base / object_key).resolve()
+    if bucket_base not in candidate.parents and candidate != bucket_base:
+        raise ValueError("object_key resolves outside artifact storage bucket")
+    return candidate
 
 
 def ensure_buckets(settings: StorageSettings) -> list[str]:
@@ -66,8 +75,14 @@ def upload_object_bytes(
     metadata: dict[str, Any] | None = None,
     tags: dict[str, Any] | None = None,
 ) -> dict[str, str | None]:
+    if settings.driver == "efs":
+        target_path = resolve_efs_object_path(settings.artifact_storage_root, bucket, object_key)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_bytes(data)
+        return {"etag": None}
+
     if settings.driver != "s3":
-        raise RuntimeError("Only the s3 storage driver is currently supported.")
+        raise RuntimeError(f"Unsupported storage driver '{settings.driver}'.")
 
     client = build_s3_client(settings)
     put_kwargs: dict[str, Any] = {
@@ -93,8 +108,11 @@ def download_object_bytes(
     bucket: str,
     object_key: str,
 ) -> bytes:
+    if settings.driver == "efs":
+        return resolve_efs_object_path(settings.artifact_storage_root, bucket, object_key).read_bytes()
+
     if settings.driver != "s3":
-        raise RuntimeError("Only the s3 storage driver is currently supported.")
+        raise RuntimeError(f"Unsupported storage driver '{settings.driver}'.")
 
     client = build_s3_client(settings)
     response = client.get_object(Bucket=bucket, Key=object_key)
@@ -108,6 +126,11 @@ def delete_object(
     bucket: str,
     object_key: str,
 ) -> None:
+    if settings.driver == "efs":
+        target_path = resolve_efs_object_path(settings.artifact_storage_root, bucket, object_key)
+        target_path.unlink(missing_ok=True)
+        return
+
     if settings.driver != "s3":
         return
 

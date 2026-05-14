@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import uuid
@@ -25,7 +26,7 @@ from backend_common.errors import install_exception_handlers
 from backend_common.identity import ensure_local_user
 from backend_common.queue import JudgeJobMessage, SQSJudgeQueue
 from backend_common.settings import load_service_settings
-from backend_common.storage import download_object_bytes
+from backend_common.storage import download_object_bytes, resolve_efs_object_path, upload_object_bytes
 
 SETTINGS = load_service_settings("submission-service")
 BOOTSTRAP_SUMMARY: dict[str, Any] = {}
@@ -230,7 +231,156 @@ def storage_object_from_row(
         "size_bytes": row.get(f"{prefix}_size_bytes"),
         "sha256": row.get(f"{prefix}_sha256"),
         "etag": row.get(f"{prefix}_etag"),
+        "storage_driver": row.get(f"{prefix}_storage_driver"),
+        "filesystem_path": row.get(f"{prefix}_filesystem_path"),
+        "artifact_kind": row.get(f"{prefix}_artifact_kind"),
     }
+
+
+def create_storage_object_metadata(
+    cursor: Any,
+    *,
+    bucket: str,
+    object_key: str,
+    content_type: str,
+    original_filename: str,
+    data: bytes,
+    artifact_kind: str,
+    uploaded_by_user_id: str | None = None,
+    etag: str | None = None,
+    metadata_json: dict[str, Any] | None = None,
+) -> str:
+    filesystem_path = None
+    if SETTINGS.storage.driver == "efs":
+        filesystem_path = str(
+            resolve_efs_object_path(
+                SETTINGS.storage.artifact_storage_root,
+                bucket,
+                object_key,
+            )
+        )
+
+    cursor.execute(
+        """
+        insert into storage.objects (
+          bucket,
+          object_key,
+          content_type,
+          original_filename,
+          size_bytes,
+          sha256,
+          etag,
+          storage_driver,
+          filesystem_path,
+          artifact_kind,
+          metadata_json,
+          uploaded_by_user_id
+        )
+        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::uuid)
+        returning id::text as id
+        """,
+        (
+            bucket,
+            object_key,
+            content_type,
+            original_filename,
+            len(data),
+            hashlib.sha256(data).hexdigest(),
+            etag,
+            SETTINGS.storage.driver,
+            filesystem_path,
+            artifact_kind,
+            Json(metadata_json or {}),
+            uploaded_by_user_id,
+        ),
+    )
+    object_row = cursor.fetchone()
+    return object_row["id"]
+
+
+def persist_submission_artifact(
+    cursor: Any,
+    *,
+    submission_id: str,
+    artifact_kind: str,
+    relative_path: str,
+    data: bytes,
+    content_type: str,
+    original_filename: str,
+    uploaded_by_user_id: str | None = None,
+    metadata_json: dict[str, Any] | None = None,
+) -> str:
+    bucket = SETTINGS.storage.submissions_bucket
+    if not bucket:
+        raise RuntimeError("S3_BUCKET_SUBMISSIONS must be configured for submission artifacts.")
+
+    object_key = f"submissions/{submission_id}/{relative_path}"
+    upload_result = upload_object_bytes(
+        SETTINGS.storage,
+        bucket=bucket,
+        object_key=object_key,
+        data=data,
+        content_type=content_type,
+        metadata=metadata_json,
+        tags={"artifact_kind": artifact_kind},
+    )
+    return create_storage_object_metadata(
+        cursor,
+        bucket=bucket,
+        object_key=object_key,
+        content_type=content_type,
+        original_filename=original_filename,
+        data=data,
+        artifact_kind=artifact_kind,
+        uploaded_by_user_id=uploaded_by_user_id,
+        etag=upload_result.get("etag"),
+        metadata_json=metadata_json,
+    )
+
+
+def register_artifact_descriptor(cursor: Any, descriptor: dict[str, Any], *, artifact_kind: str) -> str:
+    bucket = str(descriptor.get("bucket") or SETTINGS.storage.submissions_bucket)
+    object_key = str(descriptor.get("object_key") or "")
+    if not bucket or not object_key:
+        raise HTTPException(status_code=400, detail=f"{artifact_kind} artifact descriptor is missing bucket or object_key.")
+
+    filesystem_path = None
+    if SETTINGS.storage.driver == "efs":
+        filesystem_path = str(resolve_efs_object_path(SETTINGS.storage.artifact_storage_root, bucket, object_key))
+
+    cursor.execute(
+        """
+        insert into storage.objects (
+          bucket,
+          object_key,
+          content_type,
+          original_filename,
+          size_bytes,
+          sha256,
+          etag,
+          storage_driver,
+          filesystem_path,
+          artifact_kind,
+          metadata_json
+        )
+        values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        returning id::text as id
+        """,
+        (
+            bucket,
+            object_key,
+            descriptor.get("content_type") or "text/plain; charset=utf-8",
+            descriptor.get("original_filename") or object_key.rsplit("/", 1)[-1],
+            int(descriptor.get("size_bytes") or 0),
+            descriptor.get("sha256"),
+            descriptor.get("etag"),
+            SETTINGS.storage.driver,
+            filesystem_path,
+            artifact_kind,
+            Json(descriptor.get("metadata_json") or {}),
+        ),
+    )
+    return cursor.fetchone()["id"]
 
 
 def update_outbox_status(event_id: str, *, status_code: str, last_error: str | None = None) -> None:
@@ -379,6 +529,7 @@ def create_submission_and_dispatch(payload: dict[str, Any], actor: AuthContext, 
                         )
 
             source_filename = payload.get("source_filename") or runtime_row["source_file_name"]
+            source_bytes = source_code.encode("utf-8")
             metadata_json: dict[str, Any] = {}
             if custom_cases:
                 metadata_json["custom_cases"] = custom_cases
@@ -391,6 +542,7 @@ def create_submission_and_dispatch(payload: dict[str, Any], actor: AuthContext, 
                   runtime_id,
                   source_code,
                   source_size_bytes,
+                  source_sha256,
                   source_filename,
                   submission_kind_code,
                   testset_id,
@@ -403,6 +555,7 @@ def create_submission_and_dispatch(payload: dict[str, Any], actor: AuthContext, 
                   %s::uuid,
                   %s::uuid,
                   %s::uuid,
+                  %s,
                   %s,
                   %s,
                   %s,
@@ -424,7 +577,8 @@ def create_submission_and_dispatch(payload: dict[str, Any], actor: AuthContext, 
                     problem_id,
                     runtime_row["id"],
                     source_code,
-                    len(source_code.encode("utf-8")),
+                    len(source_bytes),
+                    hashlib.sha256(source_bytes).hexdigest(),
                     source_filename,
                     submission_kind,
                     requested_testset_id,
@@ -435,6 +589,25 @@ def create_submission_and_dispatch(payload: dict[str, Any], actor: AuthContext, 
                 ),
             )
             created_submission = cursor.fetchone()
+            source_object_id = persist_submission_artifact(
+                cursor,
+                submission_id=created_submission["id"],
+                artifact_kind="source",
+                relative_path="source/source.txt",
+                data=source_bytes,
+                content_type="text/plain; charset=utf-8",
+                original_filename=source_filename,
+                uploaded_by_user_id=local_user["id"],
+                metadata_json={"problem_id": problem_id, "runtime_profile_key": runtime_row["profile_key"]},
+            )
+            cursor.execute(
+                """
+                update submission.submissions
+                set source_object_id = %s::uuid, updated_at = now()
+                where id = %s::uuid
+                """,
+                (source_object_id, created_submission["id"]),
+            )
 
             cursor.execute(
                 """
@@ -716,15 +889,27 @@ def get_submission_source_code(submission_id: str, user_id: str) -> dict[str, An
                   submissions.id::text as id,
                   submissions.source_code,
                   submissions.source_filename,
-                  problems.slug as problem_slug
+                  problems.slug as problem_slug,
+                  source_objects.bucket as source_bucket,
+                  source_objects.object_key as source_object_key
                 from submission.submissions as submissions
                 join problem.problems as problems on problems.id = submissions.problem_id
+                left join storage.objects as source_objects on source_objects.id = submissions.source_object_id
                 where submissions.id = %s::uuid and submissions.user_id = %s::uuid
                 """,
                 (submission_id, user_id),
             )
             row = cursor.fetchone()
-            return dict(row) if row else None
+            if row is None:
+                return None
+            source_row = dict(row)
+            if source_row.get("source_object_key"):
+                source_row["source_code"] = download_object_bytes(
+                    SETTINGS.storage,
+                    bucket=source_row["source_bucket"],
+                    object_key=source_row["source_object_key"],
+                ).decode("utf-8", errors="replace")
+            return source_row
 
 
 def get_submission_file_row(submission_id: str, object_id: str, user_id: str) -> dict[str, Any] | None:
@@ -952,6 +1137,9 @@ def get_judge_job_context(job_id: str) -> dict[str, Any] | None:
                   source_objects.size_bytes as source_size_bytes,
                   source_objects.sha256 as source_sha256,
                   source_objects.etag as source_etag,
+                  source_objects.storage_driver as source_storage_driver,
+                  source_objects.filesystem_path as source_filesystem_path,
+                  source_objects.artifact_kind as source_artifact_kind,
                   runtimes.id::text as runtime_id,
                   runtimes.profile_key,
                   runtimes.runtime_name,
@@ -1109,6 +1297,7 @@ def mark_judge_job_completed(job_id: str, payload: dict[str, Any]) -> dict[str, 
     runtime_ms = int(payload.get("runtime_ms", 0) or 0)
     memory_kb = int(payload.get("memory_kb", 0) or 0)
     results = payload.get("results", [])
+    compile_log_descriptor = payload.get("compile_log_artifact")
     compile_log_object_id = payload.get("compile_log_object_id")
     compile_result = next(
         (
@@ -1147,6 +1336,28 @@ def mark_judge_job_completed(job_id: str, payload: dict[str, Any]) -> dict[str, 
 
             cursor.execute(
                 """
+                select id::text as id, submission_id::text as submission_id
+                from submission.judge_runs
+                where judge_job_id = %s::uuid and status_code = 'running'
+                """,
+                (job_id,),
+            )
+            judge_run_row = cursor.fetchone()
+            if judge_run_row is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No running judge run was found for job '{job_id}'.",
+                )
+
+            if compile_log_object_id is None and isinstance(compile_log_descriptor, dict):
+                compile_log_object_id = register_artifact_descriptor(
+                    cursor,
+                    compile_log_descriptor,
+                    artifact_kind="compile_log",
+                )
+
+            cursor.execute(
+                """
                 update submission.judge_runs
                 set
                   status_code = %s,
@@ -1156,8 +1367,7 @@ def mark_judge_job_completed(job_id: str, payload: dict[str, Any]) -> dict[str, 
                   compile_time_ms = %s,
                   total_time_ms = %s,
                   total_memory_kb = %s
-                where judge_job_id = %s::uuid and status_code = 'running'
-                returning id::text as id, submission_id::text as submission_id
+                where id = %s::uuid
                 """,
                 (
                     status_code,
@@ -1166,15 +1376,9 @@ def mark_judge_job_completed(job_id: str, payload: dict[str, Any]) -> dict[str, 
                     compile_time_ms,
                     runtime_ms,
                     memory_kb,
-                    job_id,
+                    judge_run_row["id"],
                 ),
             )
-            judge_run_row = cursor.fetchone()
-            if judge_run_row is None:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"No running judge run was found for job '{job_id}'.",
-                )
 
             for result in results:
                 result_type_code = str(result.get("result_type_code", "compile")).strip().lower()
@@ -1194,9 +1398,21 @@ def mark_judge_job_completed(job_id: str, payload: dict[str, Any]) -> dict[str, 
                         status_code=400,
                         detail="custom_case results cannot include testcase_id.",
                     )
+                result_id = str(uuid.uuid4())
+                stdout_object_id = result.get("stdout_object_id")
+                stdout_artifact = result.get("stdout_artifact")
+                if stdout_object_id is None and isinstance(stdout_artifact, dict):
+                    stdout_object_id = register_artifact_descriptor(cursor, stdout_artifact, artifact_kind="stdout")
+
+                stderr_object_id = result.get("stderr_object_id")
+                stderr_artifact = result.get("stderr_artifact")
+                if stderr_object_id is None and isinstance(stderr_artifact, dict):
+                    stderr_object_id = register_artifact_descriptor(cursor, stderr_artifact, artifact_kind="stderr")
+
                 cursor.execute(
                     """
                     insert into submission.results (
+                      id,
                       submission_id,
                       judge_run_id,
                       testcase_id,
@@ -1219,6 +1435,7 @@ def mark_judge_job_completed(job_id: str, payload: dict[str, Any]) -> dict[str, 
                       %s::uuid,
                       %s::uuid,
                       %s::uuid,
+                      %s::uuid,
                       %s,
                       %s,
                       %s,
@@ -1236,6 +1453,7 @@ def mark_judge_job_completed(job_id: str, payload: dict[str, Any]) -> dict[str, 
                     )
                     """,
                     (
+                        result_id,
                         judge_run_row["submission_id"],
                         judge_run_row["id"],
                         testcase_id,
@@ -1246,8 +1464,8 @@ def mark_judge_job_completed(job_id: str, payload: dict[str, Any]) -> dict[str, 
                         result.get("input_preview"),
                         result.get("expected_output_preview"),
                         result.get("actual_output_preview"),
-                        result.get("stdout_object_id"),
-                        result.get("stderr_object_id"),
+                        stdout_object_id,
+                        stderr_object_id,
                         result.get("message"),
                         result.get("checker_message"),
                         result.get("exit_code"),

@@ -59,7 +59,12 @@ variable "private_app_subnet_ids" {
 }
 
 variable "sg_api_services_id" {
-  description = "Security group ID for API services"
+  description = "Security group ID for identity and problem API services"
+  type        = string
+}
+
+variable "sg_submission_service_id" {
+  description = "Security group ID for submission API service"
   type        = string
 }
 
@@ -120,6 +125,22 @@ variable "submission_bucket_name" {
   description = "Name of the submission artifacts S3 bucket"
   type        = string
   default     = ""
+}
+
+variable "efs_file_system_id" {
+  description = "EFS file system ID for submission artifacts."
+  type        = string
+}
+
+variable "efs_access_point_id" {
+  description = "EFS access point ID for submission artifacts."
+  type        = string
+}
+
+variable "artifact_storage_root" {
+  description = "Container mount path for submission artifact storage."
+  type        = string
+  default     = "/mnt/submission-artifacts"
 }
 
 variable "judge_queue_url" {

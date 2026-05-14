@@ -285,6 +285,19 @@ resource "aws_ecs_task_definition" "submission_service" {
     cpu_architecture        = "X86_64"
   }
 
+  volume {
+    name = "submission-artifacts"
+
+    efs_volume_configuration {
+      file_system_id     = var.efs_file_system_id
+      transit_encryption = "ENABLED"
+      authorization_config {
+        access_point_id = var.efs_access_point_id
+        iam             = "ENABLED"
+      }
+    }
+  }
+
   container_definitions = jsonencode([
     {
       name      = "submission-service"
@@ -292,6 +305,13 @@ resource "aws_ecs_task_definition" "submission_service" {
       cpu       = local.task_cpu.submission
       memory    = local.task_memory.submission
       essential = true
+      mountPoints = [
+        {
+          sourceVolume  = "submission-artifacts"
+          containerPath = var.artifact_storage_root
+          readOnly      = false
+        }
+      ]
       portMappings = [
         {
           containerPort = 8000
@@ -309,7 +329,11 @@ resource "aws_ecs_task_definition" "submission_service" {
         },
         {
           name  = "STORAGE_DRIVER"
-          value = "s3"
+          value = "efs"
+        },
+        {
+          name  = "ARTIFACT_STORAGE_ROOT"
+          value = var.artifact_storage_root
         },
         {
           name  = "QUEUE_DRIVER"
@@ -395,7 +419,7 @@ resource "aws_ecs_service" "submission_service" {
 
   network_configuration {
     subnets          = var.private_app_subnet_ids
-    security_groups  = [var.sg_api_services_id]
+    security_groups  = [var.sg_submission_service_id]
     assign_public_ip = false
   }
 
@@ -430,6 +454,19 @@ resource "aws_ecs_task_definition" "worker" {
     cpu_architecture        = "X86_64"
   }
 
+  volume {
+    name = "submission-artifacts"
+
+    efs_volume_configuration {
+      file_system_id     = var.efs_file_system_id
+      transit_encryption = "ENABLED"
+      authorization_config {
+        access_point_id = var.efs_access_point_id
+        iam             = "ENABLED"
+      }
+    }
+  }
+
   container_definitions = jsonencode([
     {
       name      = "worker"
@@ -437,6 +474,13 @@ resource "aws_ecs_task_definition" "worker" {
       cpu       = local.task_cpu.worker
       memory    = local.task_memory.worker
       essential = true
+      mountPoints = [
+        {
+          sourceVolume  = "submission-artifacts"
+          containerPath = var.artifact_storage_root
+          readOnly      = false
+        }
+      ]
       environment = [
         {
           name  = "LOG_LEVEL"
@@ -448,7 +492,11 @@ resource "aws_ecs_task_definition" "worker" {
         },
         {
           name  = "STORAGE_DRIVER"
-          value = "s3"
+          value = "efs"
+        },
+        {
+          name  = "ARTIFACT_STORAGE_ROOT"
+          value = var.artifact_storage_root
         },
         {
           name  = "QUEUE_DRIVER"

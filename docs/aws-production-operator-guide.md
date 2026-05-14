@@ -1,8 +1,10 @@
 # Hexacode AWS Production Operator Guide
 
-This guide explains how to deploy and operate Hexacode on AWS using Terraform, ECR, ECS Fargate, RDS/RDS Proxy, Client VPN, S3, SQS, Cognito, API Gateway, Lambda, and CloudFront.
+This guide explains how to deploy and operate Hexacode on AWS using Terraform, ECR, ECS Fargate, RDS/RDS Proxy, Client VPN, S3, SQS, Cognito, API Gateway, Lambda, WAF, Network Firewall, EFS, AWS Backup, and CloudFront.
 
-Do not paste AWS secret keys, passwords, admin passwords, or private certificate material into this file. Use placeholders and environment variables.
+The current W5 cloud-debugging deployment target is `hexacode-dev`. Do not touch the existing live `hexacode-prod` stack, ECR repository, VPC, state, or frontend distribution unless the deployment owner explicitly changes the target environment.
+
+Do not paste AWS secret keys, passwords, admin passwords, private certificate material, Cognito tokens, or database passwords into this file. Use placeholders and environment variables.
 
 ## Concepts
 
@@ -43,21 +45,25 @@ Cognito handles browser sign-in and token issuance. Hexacode authorization is lo
 
 ## Preflight
 
-Before touching production, confirm these are true:
+Before touching AWS, confirm these are true:
 
 - AWS CLI is configured for the target account and region.
 - Docker Desktop is running.
 - Terraform 1.7 or newer is installed.
 - Docker can build Linux images and log in to Amazon ECR.
-- `terraform/terraform.tfvars` exists locally and is not committed.
-- `terraform/terraform.tfvars` sets `region = "us-west-2"` for the current production target.
-- `application_secret_arn` is empty for the Terraform-managed runtime secret, or points to an existing Secrets Manager secret if intentionally reusing one.
-- `chat_lambda_arn` is empty for the Terraform-managed Bedrock chat stack, or points to an external chat Lambda only if intentionally bypassing the built-in module.
-- `frontend_domain` is a stable custom frontend URL if available. If using the generated CloudFront domain, plan for the two-pass frontend-domain update described below.
-- If Client VPN is enabled, the server and client-root ACM certificate ARNs are available.
-- No private certificate material, passwords, or AWS secret keys are pasted into docs or committed files.
+- The current W5 target is `hexacode-dev`, not `hexacode-prod`.
+- `terraform/terraform-dev.tfvars` exists locally, is copied from `terraform/terraform-dev.tfvars.example`, and is not committed.
+- `terraform/terraform-dev.tfvars` sets `region = "us-west-2"`, `environment = "dev"`, `cidr_block = "10.21.0.0/16"`, and `ecr_repository_name = "dev/hexacode"` unless the deployment owner explicitly chooses different dev-only values.
+- `terraform/backend-dev.hcl` exists locally, is copied from `terraform/backend-dev.hcl.example`, and uses a `dev/terraform.tfstate` key or a separate dev state bucket.
+- `terraform/terraform.tfvars` and `terraform/backend-prod.hcl` are production inputs. Do not use them for the W5 dev deployment.
+- `application_secret_arn` is empty for the Terraform-managed dev runtime secret, or points to an existing dev Secrets Manager secret if intentionally reusing one.
+- `frontend_domain` can be empty for the first dev apply. If using the generated dev CloudFront domain, plan for the two-pass frontend-domain update described below.
+- If Client VPN is enabled, the server and client-root ACM certificate ARNs are dev-safe and not copied from prod by accident.
+- No private certificate material, passwords, AWS secret keys, or raw browser tokens are pasted into docs or committed files.
 
-Useful checks:
+Stop immediately if a plan, command, output, or console page references `hexacode-prod`, `prod/terraform.tfstate`, `prod/hexacode`, or the existing production CloudFront domain during the dev deployment flow.
+
+Useful read-only checks:
 
 ```powershell
 aws sts get-caller-identity
@@ -66,13 +72,35 @@ terraform -chdir=terraform version
 docker version
 ```
 
+## W5 dev environment files
+
+Create local dev deployment inputs from the checked-in templates. These local files are intentionally ignored by git.
+
+```powershell
+Copy-Item terraform/terraform-dev.tfvars.example terraform/terraform-dev.tfvars
+Copy-Item terraform/backend-dev.hcl.example terraform/backend-dev.hcl
+```
+
+Review `terraform/terraform-dev.tfvars` before planning. Minimum dev isolation values:
+
+```hcl
+environment         = "dev"
+cidr_block          = "10.21.0.0/16"
+ecr_repository_name = "dev/hexacode"
+image_tag           = "dev-git-sha"
+frontend_domain     = ""
+```
+
+Use `frontend_domain = ""` only for the first dev apply. After Terraform creates the dev CloudFront distribution, set it to `https://<dev-cloudfront-domain>` and run a second reviewed dev plan/apply so Cognito callbacks, API Gateway CORS, CORS Lambda, and the chat Lambda allowed origin match the dev browser origin.
+
 ## Terraform remote state bootstrap
 
-Terraform state should live in an encrypted, versioned S3 bucket with native S3 lockfiles so production changes are durable and serialized across operators.
+Terraform state should live in an encrypted, versioned S3 bucket with native S3 lockfiles so changes are durable and serialized across operators. For W5, bootstrap a dev state bucket or confirm the dev bucket already exists. This is the first mutating AWS step; do it only after the read-only checks and target environment review pass.
 
 ```powershell
 $env:AWS_REGION = "us-west-2"
-$env:HEXACODE_TF_STATE_BUCKET = "hexacode-prod-terraform-state-$((aws sts get-caller-identity --query Account --output text).Trim())-$env:AWS_REGION"
+$env:AWS_ACCOUNT_ID = (aws sts get-caller-identity --query Account --output text).Trim()
+$env:HEXACODE_TF_STATE_BUCKET = "hexacode-dev-terraform-state-$env:AWS_ACCOUNT_ID-$env:AWS_REGION"
 
 aws s3api create-bucket `
   --bucket $env:HEXACODE_TF_STATE_BUCKET `
@@ -80,7 +108,7 @@ aws s3api create-bucket `
   --create-bucket-configuration LocationConstraint=$env:AWS_REGION
 ```
 
-For `us-east-1`, omit `--create-bucket-configuration LocationConstraint=...`. For Hexacode production, keep `$env:AWS_REGION` aligned with the deployment region used in `terraform.tfvars`.
+For `us-east-1`, omit `--create-bucket-configuration LocationConstraint=...`. The W5 dev deployment uses `us-west-2`.
 
 ```powershell
 aws s3api put-bucket-versioning `
@@ -92,37 +120,33 @@ aws s3api put-bucket-encryption `
   --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
 ```
 
-Initialize Terraform against that backend after the bucket exists:
+Initialize Terraform against the dev backend after the bucket exists:
 
 ```powershell
-terraform -chdir=terraform init -reconfigure `
-  -backend-config="bucket=$env:HEXACODE_TF_STATE_BUCKET" `
-  -backend-config="key=prod/terraform.tfstate" `
-  -backend-config="region=$env:AWS_REGION" `
-  -backend-config="use_lockfile=true" `
-  -backend-config="encrypt=true"
+terraform -chdir=terraform init -reconfigure -backend-config=backend-dev.hcl
 ```
 
-Expected: Terraform initializes the S3 backend and uses a native S3 lockfile without a DynamoDB lock table.
+Expected: Terraform initializes the S3 backend and uses `dev/terraform.tfstate`. Stop if Terraform reports `prod/terraform.tfstate` or the prod state bucket.
 
 ## Build and push images to ECR
 
-Terraform creates the ECR repository, but Terraform cannot deploy ECS tasks successfully until the referenced image tags exist. From empty state, bootstrap only the Terraform-managed ECR repository first, then push images, then run the full Terraform plan.
+Terraform creates the ECR repository, but Terraform cannot deploy ECS tasks successfully until the referenced image tags exist. From empty dev state, bootstrap only the Terraform-managed dev ECR repository first, then push images, then run the full dev Terraform plan.
 
 ```powershell
-terraform -chdir=terraform plan -target=module.ecr -out=tfplan-ecr-bootstrap
-terraform -chdir=terraform apply tfplan-ecr-bootstrap
+terraform -chdir=terraform plan -var-file=terraform-dev.tfvars -target=module.ecr -out=tfplan-dev-ecr-bootstrap
+terraform -chdir=terraform show -no-color tfplan-dev-ecr-bootstrap | Select-String "hexacode-prod|prod/hexacode|prod/terraform.tfstate"
+terraform -chdir=terraform apply tfplan-dev-ecr-bootstrap
 ```
 
-Set the image tag and ECR coordinates. ECR image tags are immutable, so choose a new suffix for each release, such as an incrementing release number or git SHA.
+Expected: the review command prints no matches. Set the image tag and ECR coordinates. ECR image tags are immutable, so choose a new dev suffix for each rollout, such as `dev-<git-sha>`.
 
 ```powershell
 $env:AWS_REGION = "us-west-2"
 $env:AWS_ACCOUNT_ID = (aws sts get-caller-identity --query Account --output text).Trim()
-$env:ECR_REPOSITORY = "prod/hexacode"
+$env:ECR_REPOSITORY = "dev/hexacode"
 $env:ECR_REGISTRY = "$env:AWS_ACCOUNT_ID.dkr.ecr.$env:AWS_REGION.amazonaws.com"
 $env:ECR_REPOSITORY_URI = "$env:ECR_REGISTRY/$env:ECR_REPOSITORY"
-$env:IMAGE_TAG = "1"
+$env:IMAGE_TAG = "dev-$((git rev-parse --short HEAD).Trim())"
 ```
 
 Log Docker in to ECR:
@@ -173,11 +197,29 @@ Expected ECR tags:
 - `submission-service-$env:IMAGE_TAG`
 - `worker-$env:IMAGE_TAG`
 
-Set the same suffix value in `terraform/terraform.tfvars`:
+Set the same suffix value in `terraform/terraform-dev.tfvars`:
 
 ```hcl
-image_tag = "git-sha-or-release-tag"
+image_tag = "dev-git-sha"
 ```
+
+You can use the repo helper instead of manual Docker commands. If the helper's nested Docker login fails after the manual login above succeeded, rerun it with `-SkipLogin` so it reuses the current Docker ECR session:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/push-ecr.ps1 `
+  -Region $env:AWS_REGION `
+  -Repository $env:ECR_REPOSITORY `
+  -TagSuffix $env:IMAGE_TAG
+
+# Use only after the manual docker login command above succeeded.
+powershell -ExecutionPolicy Bypass -File scripts/push-ecr.ps1 `
+  -Region $env:AWS_REGION `
+  -Repository $env:ECR_REPOSITORY `
+  -TagSuffix $env:IMAGE_TAG `
+  -SkipLogin
+```
+
+Because the dev ECR repository uses immutable tags, a partially completed push may leave one service tag present even if a later service build fails. Do not overwrite that tag. Choose a fresh dev suffix such as `dev-<gitsha>-r1`, push all four images again, then set the same fresh suffix in `terraform/terraform-dev.tfvars`.
 
 ## Terraform init, validate, plan, and apply
 
@@ -188,25 +230,33 @@ terraform -chdir=terraform fmt -recursive
 terraform -chdir=terraform validate
 ```
 
-Create a plan:
+Create a dev plan:
 
 ```powershell
-terraform -chdir=terraform plan -var-file=terraform.tfvars -out=tfplan
+terraform -chdir=terraform plan -var-file=terraform-dev.tfvars -out=tfplan-dev
+terraform -chdir=terraform show -no-color tfplan-dev > tfplan-dev.txt
+Select-String -Path terraform/tfplan-dev.txt -Pattern "hexacode-prod|prod/hexacode|prod/terraform.tfstate"
 ```
 
 Stop here and review the plan before applying. Confirm especially:
 
 - region is `us-west-2`
+- environment is `dev`
+- planned resource names use `hexacode-dev`, not `hexacode-prod`
+- Terraform state key is `dev/terraform.tfstate`
+- ECR repository is `dev/hexacode`
+- VPC CIDR does not overlap the existing prod VPC
 - RDS is private and not publicly accessible
 - ECS tasks run without public IPs
-- API services and worker use the expected ECR tags
-- Client VPN is disabled unless certificate ARNs are intentionally supplied
-- no unexpected resource replacement appears for stateful resources
+- API services and worker use the expected dev ECR tags
+- WAF, Network Firewall, VPC Flow Logs, EFS, AWS Backup, API Gateway JWT auth, chat throttling, and chat Lambda reserved concurrency appear in the plan
+- Client VPN is disabled unless dev certificate ARNs are intentionally supplied
+- no existing `hexacode-prod` resource appears as updated, replaced, or destroyed
 
-Only apply after the plan has been reviewed:
+Only apply after the dev plan has been reviewed and the deployment owner approves the AWS mutation:
 
 ```powershell
-terraform -chdir=terraform apply tfplan
+terraform -chdir=terraform apply tfplan-dev
 ```
 
 After apply, collect the outputs used by later steps:
@@ -228,22 +278,23 @@ aws ecs describe-services --region $env:AWS_REGION --cluster $env:ECS_CLUSTER --
   (terraform -chdir=terraform output -raw problem_service_name) `
   (terraform -chdir=terraform output -raw submission_service_name) `
   (terraform -chdir=terraform output -raw worker_service_name)
-aws rds describe-db-instances --region $env:AWS_REGION --db-instance-identifier "hexacode-prod-db"
-aws rds describe-db-proxies --region $env:AWS_REGION --db-proxy-name "hexacode-prod-db-proxy"
+aws rds describe-db-instances --region $env:AWS_REGION --db-instance-identifier "hexacode-dev-db"
+aws rds describe-db-proxies --region $env:AWS_REGION --db-proxy-name "hexacode-dev-db-proxy"
 aws sqs get-queue-attributes --region $env:AWS_REGION --queue-url (terraform -chdir=terraform output -raw judge_queue_url) --attribute-names All
 ```
 
-If `frontend_domain` was a placeholder because the release uses the generated CloudFront domain, update `terraform/terraform.tfvars` after the first apply:
+If `frontend_domain` was empty because the release uses the generated CloudFront domain, update `terraform/terraform-dev.tfvars` after the first dev apply:
 
 ```hcl
-frontend_domain = "https://<cloudfront-domain-output>"
+frontend_domain = "https://<dev-cloudfront-domain-output>"
 ```
 
-Then run a second reviewed plan/apply so Cognito callback/logout URLs, API Gateway CORS, CORS Lambda, and chat Lambda allowed origin all match the real browser origin:
+Then run a second reviewed dev plan/apply so Cognito callback/logout URLs, API Gateway CORS, CORS Lambda, and chat Lambda allowed origin all match the real browser origin:
 
 ```powershell
-terraform -chdir=terraform plan -var-file=terraform.tfvars -out=tfplan-frontend-domain
-terraform -chdir=terraform apply tfplan-frontend-domain
+terraform -chdir=terraform plan -var-file=terraform-dev.tfvars -out=tfplan-dev-frontend-domain
+terraform -chdir=terraform show -no-color tfplan-dev-frontend-domain | Select-String "hexacode-prod|prod/hexacode|prod/terraform.tfstate"
+terraform -chdir=terraform apply tfplan-dev-frontend-domain
 ```
 
 ## Frontend build, upload, and CloudFront invalidation
@@ -254,7 +305,7 @@ Build the React frontend as static assets. Do not deploy the frontend dev server
 $env:PUBLIC_API_BASE_URL = terraform -chdir=terraform output -raw api_gateway_url
 $env:PUBLIC_COGNITO_CLIENT_ID = terraform -chdir=terraform output -raw cognito_app_client_id
 $env:PUBLIC_COGNITO_REGION = $env:AWS_REGION
-$env:PUBLIC_COGNITO_DOMAIN = "https://hexacode-prod.auth.$env:AWS_REGION.amazoncognito.com"
+$env:PUBLIC_COGNITO_DOMAIN = "https://hexacode-dev.auth.$env:AWS_REGION.amazoncognito.com"
 $env:PUBLIC_COGNITO_SCOPES = "openid email profile"
 ```
 
@@ -277,7 +328,7 @@ $env:CLOUDFRONT_DISTRIBUTION_ID = terraform -chdir=terraform output -raw cloudfr
 aws cloudfront create-invalidation --distribution-id $env:CLOUDFRONT_DISTRIBUTION_ID --paths "/*"
 ```
 
-Expected: CloudFront serves the new frontend and the frontend points to the production API Gateway/Cognito settings for the release.
+Expected: CloudFront serves the new frontend and the frontend points to the dev API Gateway/Cognito settings for the W5 rollout.
 
 ## Seed initial problems
 
@@ -318,7 +369,7 @@ $seedTask = aws ecs run-task `
 $env:TASK_ARN = $seedTask.Trim()
 aws ecs wait tasks-stopped --region $env:AWS_REGION --cluster $env:ECS_CLUSTER --tasks $env:TASK_ARN
 aws ecs describe-tasks --region $env:AWS_REGION --cluster $env:ECS_CLUSTER --tasks $env:TASK_ARN --query "tasks[0].containers[0].exitCode"
-aws logs tail /ecs/hexacode-prod/problem-service --region $env:AWS_REGION --since 30m
+aws logs tail /ecs/hexacode-dev/problem-service --region $env:AWS_REGION --since 30m
 ```
 
 Expected: exit code is `0`, logs print JSON with created/imported problem counts, and the frontend problem list shows seeded problems.
@@ -353,14 +404,14 @@ $adminTask = aws ecs run-task `
 $env:TASK_ARN = $adminTask.Trim()
 aws ecs wait tasks-stopped --region $env:AWS_REGION --cluster $env:ECS_CLUSTER --tasks $env:TASK_ARN
 aws ecs describe-tasks --region $env:AWS_REGION --cluster $env:ECS_CLUSTER --tasks $env:TASK_ARN --query "tasks[0].containers[0].exitCode"
-aws logs tail /ecs/hexacode-prod/identity-service --region $env:AWS_REGION --since 30m
+aws logs tail /ecs/hexacode-dev/identity-service --region $env:AWS_REGION --since 30m
 ```
 
 Expected: exit code is `0`, and task logs include JSON with `"promoted": true` and `"role_code": "admin"`.
 
-## Production smoke tests
+## W5 dev smoke tests
 
-Run this checklist before opening traffic broadly:
+Run this checklist before opening traffic broadly. These tests collect dev evidence only; do not use prod tokens, prod CloudFront URLs, or prod ECS/log resources.
 
 - [ ] Cognito sign-up/sign-in works.
 - [ ] `/api/auth/me` returns the signed-in user.
@@ -368,14 +419,20 @@ Run this checklist before opening traffic broadly:
 - [ ] Problem catalog import exits with code 0.
 - [ ] Problem listing shows seeded published problems.
 - [ ] Problem detail loads statements and sample cases.
-- [ ] Bedrock chatbot returns a response.
-- [ ] Chat misconfiguration returns a visible, non-secret error.
+- [ ] Bedrock chatbot returns a response through API Gateway JWT auth.
+- [ ] Unauthenticated chat requests are rejected before Lambda invocation.
+- [ ] Chat throttling and Lambda reserved concurrency are visible in AWS configuration.
+- [ ] WAF Web ACLs are attached to CloudFront and the regional ALB target.
+- [ ] Network Firewall endpoints, logs, and private route table routes are present for dev.
+- [ ] VPC Flow Logs are writing to the dev CloudWatch log group.
+- [ ] EFS mount targets and access point exist, and submission-service/worker task definitions mount EFS with transit encryption.
+- [ ] AWS Backup vault and daily plan cover dev RDS and EFS.
 - [ ] Practice submission returns `202`.
 - [ ] SQS queue receives and drains the judge job.
 - [ ] ECS Fargate worker logs show job execution.
 - [ ] Submission detail shows final verdict/results.
 - [ ] Another user cannot read that submission source or private artifacts.
-- [ ] Client VPN can reach the RDS Proxy endpoint on port 5432.
+- [ ] Client VPN can reach the RDS Proxy endpoint on port 5432 if Client VPN is enabled for dev.
 
 Use these commands with a real browser user token for API smoke tests:
 
@@ -417,7 +474,7 @@ aws sqs get-queue-attributes `
   --queue-url $env:JUDGE_QUEUE_URL `
   --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible
 
-aws logs tail /ecs/hexacode-prod/worker --region $env:AWS_REGION --since 30m
+aws logs tail /ecs/hexacode-dev/worker --region $env:AWS_REGION --since 30m
 ```
 
 Create one practice submission from the browser, then rerun the SQS and worker-log commands. The queue should drain and the submission detail page should show a final verdict. Verify cross-user denial by signing in as a second user and requesting the first user's `/api/submissions/<id>/source`; it should return 403 or 404.
@@ -431,9 +488,9 @@ Start with the smallest failing boundary and keep production state in Terraform:
 - Service unhealthy: inspect ECS service events, task stopped reasons, CloudWatch logs, and Secrets Manager/env wiring.
 - Database errors: verify RDS Proxy target health, security groups, and the app secret used for `DATABASE_URL`.
 - Queue stuck: check SQS visible/not-visible counts, worker service desired/running count, and worker logs.
-- Secrets Manager recreate failure after teardown: if `hexacode-prod-app` is scheduled for deletion, restore it and import it before retrying Terraform.
+- Secrets Manager recreate failure after dev teardown: if `hexacode-dev-app` is scheduled for deletion, restore it and import it before retrying Terraform.
   ```powershell
-  aws secretsmanager restore-secret --region $env:AWS_REGION --secret-id hexacode-prod-app
+  aws secretsmanager restore-secret --region $env:AWS_REGION --secret-id hexacode-dev-app
   terraform -chdir=terraform import 'aws_secretsmanager_secret.application[0]' <restored-secret-arn>
   ```
 - Bedrock alias failures: Terraform should manage only the alias used by the chat Lambda. If an obsolete failed alias remains from an interrupted apply, remove that obsolete address from state after confirming the module no longer declares it.
@@ -442,7 +499,7 @@ Start with the smallest failing boundary and keep production state in Terraform:
   ```
 - Chat broken: check API Gateway integration for `/api/chat/messages`, Lambda logs, Bedrock Agent alias state, Bedrock permissions, and non-secret error responses.
 - Unexpected extra CloudFront distribution: compare `terraform -chdir=terraform output -raw cloudfront_distribution_id` with the console distribution ID. Only the Terraform output is managed by this deployment; do not delete older distributions until DNS/bookmarks have been checked.
-- Bad image release: push a fixed image tag, set `image_tag` in `terraform.tfvars`, run `terraform plan`, review, and apply.
+- Bad dev image release: push a fixed dev image tag, set `image_tag` in `terraform-dev.tfvars`, run a reviewed dev Terraform plan, and apply only after approval.
 - Bad infrastructure change: prefer reverting the Terraform code/input that caused it and applying a reviewed plan; do not hand-edit shared AWS resources unless it is an emergency.
 
 For rollback, keep the previous image tag available in ECR. Set `image_tag` back to the last known-good suffix, create a new Terraform plan, review it, and apply. For frontend rollback, sync the previous built artifact to S3 and invalidate CloudFront.

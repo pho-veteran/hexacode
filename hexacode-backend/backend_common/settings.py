@@ -40,6 +40,7 @@ class StorageSettings:
     force_path_style: bool
     problems_bucket: str
     submissions_bucket: str
+    artifact_storage_root: str
 
 
 @dataclass(frozen=True)
@@ -95,6 +96,7 @@ def load_service_settings(service_name: str) -> ServiceSettings:
             force_path_style=_env_bool("S3_FORCE_PATH_STYLE", default=False),
             problems_bucket=os.getenv("S3_BUCKET_PROBLEMS", ""),
             submissions_bucket=os.getenv("S3_BUCKET_SUBMISSIONS", ""),
+            artifact_storage_root=os.getenv("ARTIFACT_STORAGE_ROOT", "/tmp/hexacode-artifacts"),
         ),
         queue=QueueSettings(
             driver=os.getenv("QUEUE_DRIVER", "sqs"),

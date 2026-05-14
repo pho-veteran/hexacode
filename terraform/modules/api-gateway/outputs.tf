@@ -17,3 +17,8 @@ output "stage_name" {
   description = "Name of the default stage"
   value       = aws_apigatewayv2_stage.default.name
 }
+
+output "stage_arn" {
+  description = "ARN of the default HTTP API stage."
+  value       = aws_apigatewayv2_stage.default.arn
+}

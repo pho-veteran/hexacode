@@ -12,7 +12,8 @@ resource "aws_cloudfront_origin_access_control" "frontend" {
 
 # CloudFront Distribution
 resource "aws_cloudfront_distribution" "frontend" {
-  enabled = true
+  enabled    = true
+  web_acl_id = var.web_acl_id
 
   price_class = "PriceClass_All"
 

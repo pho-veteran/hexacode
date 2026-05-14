@@ -2,7 +2,10 @@
 # Creates the Cognito User Pool and SPA app client for Cognito-managed sign-up and confirmation
 
 locals {
-  issuer = "https://cognito-idp.${var.region}.amazonaws.com/${aws_cognito_user_pool.main.id}"
+  issuer                     = "https://cognito-idp.${var.region}.amazonaws.com/${aws_cognito_user_pool.main.id}"
+  frontend_domain            = trimspace(var.frontend_domain)
+  frontend_domain_configured = local.frontend_domain != ""
+  frontend_urls              = local.frontend_domain_configured ? [local.frontend_domain] : []
 }
 
 # =============================================================================
@@ -55,21 +58,17 @@ resource "aws_cognito_user_pool_client" "spa" {
     "ALLOW_USER_SRP_AUTH"
   ]
 
-  callback_urls = [
-    var.frontend_domain
-  ]
+  callback_urls = local.frontend_urls
 
-  logout_urls = [
-    var.frontend_domain
-  ]
+  logout_urls = local.frontend_urls
 
-  allowed_oauth_flows                  = ["code"]
-  allowed_oauth_flows_user_pool_client = true
-  allowed_oauth_scopes = [
+  allowed_oauth_flows                  = local.frontend_domain_configured ? ["code"] : []
+  allowed_oauth_flows_user_pool_client = local.frontend_domain_configured
+  allowed_oauth_scopes = local.frontend_domain_configured ? [
     "email",
     "openid",
     "profile"
-  ]
+  ] : []
 
   refresh_token_validity = 30
   access_token_validity  = 1

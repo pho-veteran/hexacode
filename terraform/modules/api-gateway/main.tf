@@ -4,6 +4,7 @@
 locals {
   # Extract function name from ARN (ARN format: arn:aws:lambda:region:account:function:name)
   cors_lambda_name = var.cors_lambda_arn != "" ? element(split(":", var.cors_lambda_arn), 6) : ""
+  allow_origins    = var.frontend_domain == "" ? [] : [var.frontend_domain]
 }
 
 # API-level CORS configuration
@@ -13,7 +14,7 @@ resource "aws_apigatewayv2_api" "http_api" {
 
   # API-level CORS configuration
   cors_configuration {
-    allow_origins = [var.frontend_domain]
+    allow_origins = local.allow_origins
     allow_methods = [
       "GET",
       "POST",
@@ -55,6 +56,16 @@ resource "aws_apigatewayv2_stage" "default" {
   name   = "$default"
 
   auto_deploy = true
+
+  dynamic "route_settings" {
+    for_each = var.chat_lambda_enabled ? [1] : []
+
+    content {
+      route_key              = aws_apigatewayv2_route.chat_messages[0].route_key
+      throttling_burst_limit = var.chat_throttle_burst_limit
+      throttling_rate_limit  = var.chat_throttle_rate_limit
+    }
+  }
 
   access_log_settings {
     destination_arn = aws_cloudwatch_log_group.api_access_logs.arn
@@ -116,9 +127,23 @@ resource "aws_apigatewayv2_integration" "chat_lambda" {
   payload_format_version = "2.0"
 }
 
+resource "aws_apigatewayv2_authorizer" "cognito_jwt" {
+  count = var.chat_lambda_enabled ? 1 : 0
+
+  api_id           = aws_apigatewayv2_api.http_api.id
+  authorizer_type  = "JWT"
+  identity_sources = ["$request.header.Authorization"]
+  name             = "hexacode-${var.environment}-cognito-jwt"
+
+  jwt_configuration {
+    audience = [var.cognito_client_id]
+    issuer   = var.cognito_issuer
+  }
+}
+
 # Lambda invoke permission for chat lambda
 resource "aws_lambda_permission" "api_chat_lambda" {
-  count         = var.chat_lambda_enabled ? 1 : 0
+  count         = var.chat_lambda_enabled && var.chat_lambda_permission_managed ? 1 : 0
   statement_id  = "AllowAPIGatewayInvokeChat"
   action        = "lambda:InvokeFunction"
   function_name = element(split(":", var.chat_lambda_arn), 6)
@@ -150,7 +175,9 @@ resource "aws_apigatewayv2_route" "chat_messages" {
 
   api_id = aws_apigatewayv2_api.http_api.id
 
-  route_key = "POST /api/chat/messages"
+  route_key          = "POST /api/chat/messages"
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.cognito_jwt[0].id
 
   target = "integrations/${aws_apigatewayv2_integration.chat_lambda[0].id}"
 }

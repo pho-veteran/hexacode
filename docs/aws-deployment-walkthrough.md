@@ -1,8 +1,10 @@
 # AWS Deployment Walkthrough
 
-> Current production deployment runbook: see [aws-production-operator-guide.md](./aws-production-operator-guide.md). This older walkthrough is retained only for historical context until it is fully merged into the operator guide.
+> Current Terraform-managed deployment runbook: see [aws-production-operator-guide.md](./aws-production-operator-guide.md). This older walkthrough is retained only for historical context until it is fully merged into the operator guide.
 
-This document is a historical manual walkthrough for deploying Hexacode to AWS. Do not use it as the source of truth for the current Terraform-managed production deployment; use the operator guide instead.
+> Warning: this historical walkthrough is production-oriented and contains `hexacode-prod` examples. Do not use it for the W5 `hexacode-dev` rollout; use the operator guide and dev tfvars/backend templates instead.
+
+This document is a historical manual walkthrough for deploying Hexacode to AWS. Do not use it as the source of truth for the current Terraform-managed deployment; use the operator guide instead.
 
 Use it together with [aws.md](./aws.md):
 

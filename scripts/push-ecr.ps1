@@ -49,7 +49,7 @@ $serviceConfig = @{
   }
   "problem-service" = @{
     Dockerfile = "hexacode-backend/services/problem-service/Dockerfile"
-    Context = "hexacode-backend"
+    Context = "."
   }
   "submission-service" = @{
     Dockerfile = "hexacode-backend/services/submission-service/Dockerfile"

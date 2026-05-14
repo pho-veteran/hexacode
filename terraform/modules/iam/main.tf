@@ -231,6 +231,34 @@ resource "aws_iam_role_policy_attachment" "submission_task_s3" {
   policy_arn = aws_iam_policy.submission_task_s3.arn
 }
 
+resource "aws_iam_policy" "submission_artifacts_efs" {
+  name = "hexacode-${local.environment}-submission-artifacts-efs"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "elasticfilesystem:ClientMount",
+          "elasticfilesystem:ClientWrite"
+        ]
+        Resource = var.efs_file_system_arn
+        Condition = {
+          StringEquals = {
+            "elasticfilesystem:AccessPointArn" = var.efs_access_point_arn
+          }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "submission_task_efs" {
+  role       = aws_iam_role.submission_task.name
+  policy_arn = aws_iam_policy.submission_artifacts_efs.arn
+}
+
 # =============================================================================
 # Worker Service Task Role
 # SQS: GetQueueUrl/GetQueueAttributes/ReceiveMessage/DeleteMessage/ChangeMessageVisibility/CreateQueue
@@ -310,4 +338,9 @@ resource "aws_iam_policy" "worker_task_s3" {
 resource "aws_iam_role_policy_attachment" "worker_task_s3" {
   role       = aws_iam_role.worker_task.name
   policy_arn = aws_iam_policy.worker_task_s3.arn
+}
+
+resource "aws_iam_role_policy_attachment" "worker_task_efs" {
+  role       = aws_iam_role.worker_task.name
+  policy_arn = aws_iam_policy.submission_artifacts_efs.arn
 }
