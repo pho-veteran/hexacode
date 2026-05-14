@@ -16,6 +16,7 @@ from backend_common.authz import (
     PERM_OPS_READ_DASHBOARD,
     PERM_SUBMISSION_CREATE,
     require_local_permission,
+    require_owner_or_local_any_permission,
 )
 from backend_common.bootstrap import bootstrap_service
 from backend_common.cors import install_cors
@@ -509,6 +510,7 @@ def get_submission_row(submission_id: str) -> dict[str, Any] | None:
                 """
                 select
                   submissions.id::text as id,
+                  submissions.user_id::text as user_id,
                   submissions.problem_id::text as problem_id,
                   problems.slug as problem_slug,
                   problems.title as problem_title,
@@ -645,9 +647,23 @@ def list_problem_submission_states(
             return list(cursor.fetchall())
 
 
-def list_submission_results(submission_id: str) -> list[dict[str, Any]]:
+def get_submission_results_payload(submission_id: str) -> dict[str, Any] | None:
     with get_connection(SETTINGS.database_url) as connection:
         with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                """
+                select
+                  id::text as id,
+                  user_id::text as user_id
+                from submission.submissions
+                where id = %s::uuid
+                """,
+                (submission_id,),
+            )
+            submission_row = cursor.fetchone()
+            if submission_row is None:
+                return None
+
             cursor.execute(
                 """
                 select
@@ -684,7 +700,11 @@ def list_submission_results(submission_id: str) -> list[dict[str, Any]]:
                 """,
                 (submission_id,),
             )
-            return list(cursor.fetchall())
+            return {
+                "submission_id": submission_id,
+                "user_id": submission_row["user_id"],
+                "results": list(cursor.fetchall()),
+            }
 
 
 def get_submission_source_code(submission_id: str, user_id: str) -> dict[str, Any] | None:
@@ -1504,11 +1524,21 @@ async def list_my_problem_submission_states(
 
 
 @app.get("/api/submissions/{submission_id}")
-async def get_submission(submission_id: str) -> dict[str, Any]:
+async def get_submission(
+    submission_id: str,
+    actor: AuthContext = require_authenticated_user(SETTINGS),
+) -> dict[str, Any]:
+    local_user = ensure_local_actor(actor)
     submission = get_submission_row(submission_id)
     if submission is None:
         raise HTTPException(status_code=404, detail=f"Submission '{submission_id}' was not found.")
-    return {"data": submission}
+    require_owner_or_local_any_permission(
+        local_user,
+        submission["user_id"],
+        (PERM_OPS_READ_DASHBOARD,),
+        detail="You do not have permission to read this submission.",
+    )
+    return {"data": {key: value for key, value in submission.items() if key != "user_id"}}
 
 
 @app.get("/api/submissions/{submission_id}/source")
@@ -1524,11 +1554,24 @@ async def get_submission_source(
 
 
 @app.get("/api/submissions/{submission_id}/results")
-async def get_submission_results(submission_id: str) -> dict[str, Any]:
+async def get_submission_results(
+    submission_id: str,
+    actor: AuthContext = require_authenticated_user(SETTINGS),
+) -> dict[str, Any]:
+    local_user = ensure_local_actor(actor)
+    payload = get_submission_results_payload(submission_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail=f"Submission '{submission_id}' was not found.")
+    require_owner_or_local_any_permission(
+        local_user,
+        payload["user_id"],
+        (PERM_OPS_READ_DASHBOARD,),
+        detail="You do not have permission to read this submission's results.",
+    )
     return {
         "data": {
-            "submission_id": submission_id,
-            "results": list_submission_results(submission_id),
+            "submission_id": payload["submission_id"],
+            "results": payload["results"],
         }
     }
 

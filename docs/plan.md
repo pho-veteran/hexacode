@@ -98,7 +98,7 @@ Import flow:
 - keep worker execution isolated from HTTP request handling
 - keep local contracts aligned with future cloud deployment
 
-For the future cloud target, see `docs/cloud-deployment.md`.
+For the AWS production target, see `docs/aws.md` and `docs/aws-production-operator-guide.md`.
 
 Production database traffic is routed through RDS Proxy before it reaches PostgreSQL, using the managed RDS master secret for proxy auth while Terraform rewrites the shared app secret's `DATABASE_URL` host to the proxy endpoint.
 
@@ -306,7 +306,7 @@ Default cloud topology:
 
 - frontend hosting
 - Cognito
-- optional CloudFront
+- CloudFront in front of the private frontend S3 bucket
 - optional WAF
 - AWS API Gateway HTTP API
 - VPC Link

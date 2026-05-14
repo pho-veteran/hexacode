@@ -29,6 +29,12 @@ variable "chat_lambda_arn" {
   default     = ""
 }
 
+variable "chat_lambda_enabled" {
+  description = "Create the chat Lambda API Gateway route"
+  type        = bool
+  default     = false
+}
+
 variable "cors_lambda_arn" {
   description = "ARN of the CORS Lambda function"
   type        = string

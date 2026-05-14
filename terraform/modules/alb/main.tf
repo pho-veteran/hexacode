@@ -17,10 +17,11 @@ resource "aws_lb" "internal" {
 
 # Target Groups
 resource "aws_lb_target_group" "tg_identity" {
-  name     = "hexacode-${var.environment}-identity-tg"
-  port     = 8000
-  protocol = "HTTP"
-  vpc_id   = var.vpc_id
+  name_prefix = "hxi-"
+  port        = 8000
+  protocol    = "HTTP"
+  target_type = "ip"
+  vpc_id      = var.vpc_id
 
   health_check {
     enabled             = true
@@ -30,6 +31,10 @@ resource "aws_lb_target_group" "tg_identity" {
     interval            = 30
     path                = "/healthz"
     matcher             = "200"
+  }
+
+  lifecycle {
+    create_before_destroy = true
   }
 
   tags = {
@@ -38,10 +43,11 @@ resource "aws_lb_target_group" "tg_identity" {
 }
 
 resource "aws_lb_target_group" "tg_problem" {
-  name     = "hexacode-${var.environment}-problem-tg"
-  port     = 8000
-  protocol = "HTTP"
-  vpc_id   = var.vpc_id
+  name_prefix = "hxp-"
+  port        = 8000
+  protocol    = "HTTP"
+  target_type = "ip"
+  vpc_id      = var.vpc_id
 
   health_check {
     enabled             = true
@@ -51,6 +57,10 @@ resource "aws_lb_target_group" "tg_problem" {
     interval            = 30
     path                = "/healthz"
     matcher             = "200"
+  }
+
+  lifecycle {
+    create_before_destroy = true
   }
 
   tags = {
@@ -59,10 +69,11 @@ resource "aws_lb_target_group" "tg_problem" {
 }
 
 resource "aws_lb_target_group" "tg_submission" {
-  name     = "hexacode-${var.environment}-submission-tg"
-  port     = 8000
-  protocol = "HTTP"
-  vpc_id   = var.vpc_id
+  name_prefix = "hxs-"
+  port        = 8000
+  protocol    = "HTTP"
+  target_type = "ip"
+  vpc_id      = var.vpc_id
 
   health_check {
     enabled             = true
@@ -72,6 +83,10 @@ resource "aws_lb_target_group" "tg_submission" {
     interval            = 30
     path                = "/healthz"
     matcher             = "200"
+  }
+
+  lifecycle {
+    create_before_destroy = true
   }
 
   tags = {
@@ -152,9 +167,24 @@ resource "aws_lb_listener_rule" "problem_routes" {
         "/api/tags*",
         "/api/dashboard*",
         "/internal/problems*",
-        "/internal/checkers*",
-        "/internal/cache/public-problems/invalidate"
+        "/internal/checkers*"
       ]
+    }
+  }
+}
+
+resource "aws_lb_listener_rule" "problem_cache_routes" {
+  listener_arn = aws_lb_listener.http.arn
+  priority     = 31
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.tg_problem.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/internal/cache/public-problems/invalidate"]
     }
   }
 }

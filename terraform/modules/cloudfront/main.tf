@@ -33,7 +33,7 @@ resource "aws_cloudfront_distribution" "frontend" {
     compress               = true
 
     # Use managed optimized cache policy (CachingOptimized)
-    cache_policy_id = "658327ea-f89d-4fab-a0d8-8d73f8b67d80"
+    cache_policy_id = "658327ea-f89d-4fab-a63d-7e88639e58f6"
   }
 
   # Custom error responses for SPA routing - return index.html with 200 for 403/404

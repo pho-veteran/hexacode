@@ -1,28 +1,5 @@
 # Autoscaling for ECS Services
 
-# IAM role for ECS autoscaling
-resource "aws_iam_role" "ecs_autoscaling" {
-  name = "hexacode-${var.environment}-ecs-autoscaling"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Principal = {
-          Service = "application-autoscaling.amazonaws.com"
-        }
-        Action = "sts:AssumeRole"
-      }
-    ]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "ecs_autoscaling" {
-  role       = aws_iam_role.ecs_autoscaling.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AppAutoscalingECSRolePolicy"
-}
-
 # =============================================================================
 # Identity Service Scaling
 # =============================================================================
@@ -33,7 +10,6 @@ resource "aws_appautoscaling_target" "identity_service" {
   min_capacity       = 2
   resource_id        = "service/${var.ecs_cluster_name}/${aws_ecs_service.identity_service.name}"
   scalable_dimension = "ecs:service:DesiredCount"
-  role_arn           = aws_iam_role.ecs_autoscaling.arn
 }
 
 resource "aws_appautoscaling_policy" "identity_service_cpu" {
@@ -65,7 +41,6 @@ resource "aws_appautoscaling_target" "problem_service" {
   min_capacity       = 2
   resource_id        = "service/${var.ecs_cluster_name}/${aws_ecs_service.problem_service.name}"
   scalable_dimension = "ecs:service:DesiredCount"
-  role_arn           = aws_iam_role.ecs_autoscaling.arn
 }
 
 resource "aws_appautoscaling_policy" "problem_service_cpu" {
@@ -116,7 +91,6 @@ resource "aws_appautoscaling_target" "submission_service" {
   min_capacity       = 2
   resource_id        = "service/${var.ecs_cluster_name}/${aws_ecs_service.submission_service.name}"
   scalable_dimension = "ecs:service:DesiredCount"
-  role_arn           = aws_iam_role.ecs_autoscaling.arn
 }
 
 resource "aws_appautoscaling_policy" "submission_service_cpu" {
@@ -177,7 +151,6 @@ resource "aws_appautoscaling_target" "worker" {
   min_capacity       = 1
   resource_id        = "service/${var.ecs_cluster_name}/${aws_ecs_service.worker.name}"
   scalable_dimension = "ecs:service:DesiredCount"
-  role_arn           = aws_iam_role.ecs_autoscaling.arn
 }
 
 # Step scaling policy with both scale-up and scale-down steps
@@ -245,7 +218,7 @@ resource "aws_cloudwatch_metric_alarm" "worker_queue_depth_scale_up" {
   alarm_description   = "Scale up worker when at least 1 message is visible in the queue"
 
   dimensions = {
-    QueueName = split("/", var.judge_queue_url)[-1]
+    QueueName = reverse(split("/", var.judge_queue_url))[0]
   }
 
   alarm_actions = [aws_appautoscaling_policy.worker_queue_scaling.arn]
@@ -264,7 +237,7 @@ resource "aws_cloudwatch_metric_alarm" "worker_queue_depth_scale_down" {
   alarm_description   = "Scale down worker when queue is empty"
 
   dimensions = {
-    QueueName = split("/", var.judge_queue_url)[-1]
+    QueueName = reverse(split("/", var.judge_queue_url))[0]
   }
 
   alarm_actions = [aws_appautoscaling_policy.worker_queue_scaling.arn]

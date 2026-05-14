@@ -13,3 +13,9 @@ variable "vpc_cidr" {
   type        = string
   default     = "10.20.0.0/16"
 }
+
+variable "client_vpn_enabled" {
+  description = "Whether to create Client VPN security group resources"
+  type        = bool
+  default     = false
+}

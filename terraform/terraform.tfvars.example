@@ -1,13 +1,18 @@
-region                 = "ap-southeast-1"
+region                 = "us-west-2"
 environment            = "prod"
-vpc_cidr               = "10.20.0.0/16"
+cidr_block             = "10.20.0.0/16"
 availability_zones     = ["a", "b"]
 db_instance_class      = "db.r6g.large"
 db_multi_az            = true
 db_allocated_storage   = 200
-application_secret_arn = "arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:hexacode-prod-app"
-ecr_repository_url     = "123456789012.dkr.ecr.ap-southeast-1.amazonaws.com/prod/hexacode"
-image_tag              = "git-sha-or-release-tag"
-chat_lambda_arn        = "arn:aws:lambda:ap-southeast-1:123456789012:function:hexacode-prod-chat"
-frontend_domain        = "https://d2x2kyi0hl9xxu.cloudfront.net"
-cors_lambda_arn        = "arn:aws:lambda:ap-southeast-1:123456789012:function:hexacode-prod-cors"
+application_secret_arn = ""
+ecr_repository_name    = "prod/hexacode"
+image_tag              = "1"
+chat_lambda_arn        = "arn:aws:lambda:us-west-2:123456789012:function:hexacode-prod-chat"
+frontend_domain        = "https://your-cloudfront-domain.example"
+kms_key_arn            = ""
+
+client_vpn_enabled                    = false
+client_vpn_cidr_block                 = "10.30.0.0/22"
+client_vpn_server_certificate_arn     = ""
+client_vpn_root_certificate_chain_arn = ""

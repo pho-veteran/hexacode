@@ -1,6 +1,8 @@
 # AWS Deployment Walkthrough
 
-This document is the step-by-step runbook for deploying the current Hexacode repo to AWS.
+> Current production deployment runbook: see [aws-production-operator-guide.md](./aws-production-operator-guide.md). This older walkthrough is retained only for historical context until it is fully merged into the operator guide.
+
+This document is a historical manual walkthrough for deploying Hexacode to AWS. Do not use it as the source of truth for the current Terraform-managed production deployment; use the operator guide instead.
 
 Use it together with [aws.md](./aws.md):
 
@@ -11,8 +13,8 @@ This walkthrough assumes:
 
 - region: `us-west-2`
 - environment name: `prod`
-- ECR repository already exists: `prod/hexacode`
-- application secret already exists: `arn:aws:secretsmanager:us-west-2:380825342853:secret:hexacode-prod-V7OL5l`
+- ECR repository is managed by Terraform as `prod/hexacode`
+- application secret already exists or is Terraform-managed as described in the operator guide; do not paste real secret ARNs into committed docs
 - frontend is deployed to S3 + CloudFront
 - backend services are deployed to ECS Fargate
 - the local `gateway` container is not deployed to AWS
@@ -196,7 +198,7 @@ Recommended beginner settings:
 
 This walkthrough assumes you already created one shared application secret in Secrets Manager:
 
-- `arn:aws:secretsmanager:us-west-2:380825342853:secret:hexacode-prod-V7OL5l`
+- `arn:aws:secretsmanager:us-west-2:<account-id>:secret:hexacode-prod-app`
 
 Store JSON like this in that secret:
 
@@ -266,7 +268,7 @@ Those values are configuration, not secrets.
 
 For the current setup, use this shared application secret:
 
-- `arn:aws:secretsmanager:us-west-2:380825342853:secret:hexacode-prod-V7OL5l`
+- `arn:aws:secretsmanager:us-west-2:<account-id>:secret:hexacode-prod-app`
 
 Keep at least these JSON keys inside it:
 
@@ -367,7 +369,7 @@ Execution role inline policy:
       "Action": [
         "secretsmanager:GetSecretValue"
       ],
-      "Resource": "arn:aws:secretsmanager:us-west-2:380825342853:secret:hexacode-prod-V7OL5l"
+      "Resource": "arn:aws:secretsmanager:us-west-2:<account-id>:secret:hexacode-prod-app"
     }
   ]
 }
@@ -440,7 +442,7 @@ Create one task role per service.
         "sqs:GetQueueUrl",
         "sqs:SendMessage"
       ],
-      "Resource": "arn:aws:sqs:us-west-2:380825342853:hexacode-prod-judge-jobs"
+      "Resource": "arn:aws:sqs:us-west-2:<account-id>:hexacode-prod-judge-jobs"
     },
     {
       "Sid": "SubmissionBucketMeta",
@@ -481,7 +483,7 @@ Create one task role per service.
         "sqs:ReceiveMessage",
         "sqs:DeleteMessage"
       ],
-      "Resource": "arn:aws:sqs:us-west-2:380825342853:hexacode-prod-judge-jobs"
+      "Resource": "arn:aws:sqs:us-west-2:<account-id>:hexacode-prod-judge-jobs"
     },
     {
       "Sid": "ProblemBucketRead",
@@ -548,9 +550,9 @@ Use these placeholder rules:
 
 These examples already use:
 
-- AWS account ID `380825342853`
+- AWS account ID `<account-id>`
 - region `us-west-2`
-- shared application secret ARN `arn:aws:secretsmanager:us-west-2:380825342853:secret:hexacode-prod-V7OL5l`
+- shared application secret ARN `arn:aws:secretsmanager:us-west-2:<account-id>:secret:hexacode-prod-app`
 
 Because the examples inject JSON keys from a Secrets Manager secret, use Fargate platform version `LATEST` or at least Linux platform version `1.4.0` when you create the ECS services.
 
@@ -563,7 +565,7 @@ Because the examples inject JSON keys from a Secrets Manager secret, use Fargate
   "containerDefinitions": [
     {
       "name": "identity-service",
-      "image": "380825342853.dkr.ecr.us-west-2.amazonaws.com/prod/hexacode:identity-service-abc1234",
+      "image": "<account-id>.dkr.ecr.us-west-2.amazonaws.com/prod/hexacode:identity-service-abc1234",
       "essential": true,
       "portMappings": [
         {
@@ -581,7 +583,7 @@ Because the examples inject JSON keys from a Secrets Manager secret, use Fargate
       "secrets": [
         {
           "name": "DATABASE_URL",
-          "valueFrom": "arn:aws:secretsmanager:us-west-2:380825342853:secret:hexacode-prod-V7OL5l:DATABASE_URL::"
+          "valueFrom": "arn:aws:secretsmanager:us-west-2:<account-id>:secret:hexacode-prod-app:DATABASE_URL::"
         }
       ],
       "logConfiguration": {
@@ -598,8 +600,8 @@ Because the examples inject JSON keys from a Secrets Manager secret, use Fargate
   "networkMode": "awsvpc",
   "memory": "512",
   "cpu": "256",
-  "executionRoleArn": "arn:aws:iam::380825342853:role/hexacode-prod-ecs-execution",
-  "taskRoleArn": "arn:aws:iam::380825342853:role/hexacode-prod-identity-task",
+  "executionRoleArn": "arn:aws:iam::<account-id>:role/hexacode-prod-ecs-execution",
+  "taskRoleArn": "arn:aws:iam::<account-id>:role/hexacode-prod-identity-task",
   "runtimePlatform": {
     "cpuArchitecture": "X86_64",
     "operatingSystemFamily": "LINUX"
@@ -616,7 +618,7 @@ Because the examples inject JSON keys from a Secrets Manager secret, use Fargate
   "containerDefinitions": [
     {
       "name": "problem-service",
-      "image": "380825342853.dkr.ecr.us-west-2.amazonaws.com/prod/hexacode:problem-service-abc1234",
+      "image": "<account-id>.dkr.ecr.us-west-2.amazonaws.com/prod/hexacode:problem-service-abc1234",
       "essential": true,
       "portMappings": [
         {
@@ -641,11 +643,11 @@ Because the examples inject JSON keys from a Secrets Manager secret, use Fargate
       "secrets": [
         {
           "name": "DATABASE_URL",
-          "valueFrom": "arn:aws:secretsmanager:us-west-2:380825342853:secret:hexacode-prod-V7OL5l:DATABASE_URL::"
+          "valueFrom": "arn:aws:secretsmanager:us-west-2:<account-id>:secret:hexacode-prod-app:DATABASE_URL::"
         },
         {
           "name": "REDIS_URL",
-          "valueFrom": "arn:aws:secretsmanager:us-west-2:380825342853:secret:hexacode-prod-V7OL5l:REDIS_URL::"
+          "valueFrom": "arn:aws:secretsmanager:us-west-2:<account-id>:secret:hexacode-prod-app:REDIS_URL::"
         }
       ],
       "logConfiguration": {
@@ -662,8 +664,8 @@ Because the examples inject JSON keys from a Secrets Manager secret, use Fargate
   "networkMode": "awsvpc",
   "memory": "1024",
   "cpu": "512",
-  "executionRoleArn": "arn:aws:iam::380825342853:role/hexacode-prod-ecs-execution",
-  "taskRoleArn": "arn:aws:iam::380825342853:role/hexacode-prod-problem-task",
+  "executionRoleArn": "arn:aws:iam::<account-id>:role/hexacode-prod-ecs-execution",
+  "taskRoleArn": "arn:aws:iam::<account-id>:role/hexacode-prod-problem-task",
   "runtimePlatform": {
     "cpuArchitecture": "X86_64",
     "operatingSystemFamily": "LINUX"
@@ -680,7 +682,7 @@ Because the examples inject JSON keys from a Secrets Manager secret, use Fargate
   "containerDefinitions": [
     {
       "name": "submission-service",
-      "image": "380825342853.dkr.ecr.us-west-2.amazonaws.com/prod/hexacode:submission-service-abc1234",
+      "image": "<account-id>.dkr.ecr.us-west-2.amazonaws.com/prod/hexacode:submission-service-abc1234",
       "essential": true,
       "portMappings": [
         {
@@ -699,7 +701,7 @@ Because the examples inject JSON keys from a Secrets Manager secret, use Fargate
         { "name": "S3_BUCKET_PROBLEMS", "value": "" },
         { "name": "S3_BUCKET_SUBMISSIONS", "value": "hexacode-prod-submission-artifacts" },
         { "name": "SQS_ENDPOINT", "value": "" },
-        { "name": "SQS_JUDGE_QUEUE_URL", "value": "https://sqs.us-west-2.amazonaws.com/380825342853/hexacode-prod-judge-jobs" },
+        { "name": "SQS_JUDGE_QUEUE_URL", "value": "https://sqs.us-west-2.amazonaws.com/<account-id>/hexacode-prod-judge-jobs" },
         { "name": "PROBLEM_SERVICE_URL", "value": "http://internal-alb-dns-name" },
         { "name": "COGNITO_USER_POOL_ID", "value": "us-west-2_xxxxxx" },
         { "name": "COGNITO_APP_CLIENT_ID", "value": "xxxxxxxxxxxx" },
@@ -709,7 +711,7 @@ Because the examples inject JSON keys from a Secrets Manager secret, use Fargate
       "secrets": [
         {
           "name": "DATABASE_URL",
-          "valueFrom": "arn:aws:secretsmanager:us-west-2:380825342853:secret:hexacode-prod-V7OL5l:DATABASE_URL::"
+          "valueFrom": "arn:aws:secretsmanager:us-west-2:<account-id>:secret:hexacode-prod-app:DATABASE_URL::"
         }
       ],
       "logConfiguration": {
@@ -726,8 +728,8 @@ Because the examples inject JSON keys from a Secrets Manager secret, use Fargate
   "networkMode": "awsvpc",
   "memory": "1024",
   "cpu": "512",
-  "executionRoleArn": "arn:aws:iam::380825342853:role/hexacode-prod-ecs-execution",
-  "taskRoleArn": "arn:aws:iam::380825342853:role/hexacode-prod-submission-task",
+  "executionRoleArn": "arn:aws:iam::<account-id>:role/hexacode-prod-ecs-execution",
+  "taskRoleArn": "arn:aws:iam::<account-id>:role/hexacode-prod-submission-task",
   "runtimePlatform": {
     "cpuArchitecture": "X86_64",
     "operatingSystemFamily": "LINUX"
@@ -744,7 +746,7 @@ Because the examples inject JSON keys from a Secrets Manager secret, use Fargate
   "containerDefinitions": [
     {
       "name": "worker",
-      "image": "380825342853.dkr.ecr.us-west-2.amazonaws.com/prod/hexacode:worker-abc1234",
+      "image": "<account-id>.dkr.ecr.us-west-2.amazonaws.com/prod/hexacode:worker-abc1234",
       "essential": true,
       "environment": [
         { "name": "LOG_LEVEL", "value": "INFO" },
@@ -757,7 +759,7 @@ Because the examples inject JSON keys from a Secrets Manager secret, use Fargate
         { "name": "S3_BUCKET_PROBLEMS", "value": "hexacode-prod-problem-assets" },
         { "name": "S3_BUCKET_SUBMISSIONS", "value": "" },
         { "name": "SQS_ENDPOINT", "value": "" },
-        { "name": "SQS_JUDGE_QUEUE_URL", "value": "https://sqs.us-west-2.amazonaws.com/380825342853/hexacode-prod-judge-jobs" },
+        { "name": "SQS_JUDGE_QUEUE_URL", "value": "https://sqs.us-west-2.amazonaws.com/<account-id>/hexacode-prod-judge-jobs" },
         { "name": "PROBLEM_SERVICE_URL", "value": "http://internal-alb-dns-name" },
         { "name": "SUBMISSION_SERVICE_URL", "value": "http://internal-alb-dns-name" },
         { "name": "WORKER_NAME", "value": "worker-prod-1" },
@@ -778,8 +780,8 @@ Because the examples inject JSON keys from a Secrets Manager secret, use Fargate
   "networkMode": "awsvpc",
   "memory": "4096",
   "cpu": "2048",
-  "executionRoleArn": "arn:aws:iam::380825342853:role/hexacode-prod-ecs-execution",
-  "taskRoleArn": "arn:aws:iam::380825342853:role/hexacode-prod-worker-task",
+  "executionRoleArn": "arn:aws:iam::<account-id>:role/hexacode-prod-ecs-execution",
+  "taskRoleArn": "arn:aws:iam::<account-id>:role/hexacode-prod-worker-task",
   "runtimePlatform": {
     "cpuArchitecture": "X86_64",
     "operatingSystemFamily": "LINUX"
@@ -958,7 +960,7 @@ Enable CORS for the frontend origin only.
 
 Allow at least:
 
-- origin: your exact frontend origin, for example `https://d2x2kyi0hl9xxu.cloudfront.net`
+- origin: your exact frontend origin from `terraform -chdir=terraform output -raw cloudfront_domain`, for example `https://<cloudfront-domain>`
 - methods: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS`
 - headers: `authorization`, `content-type`, `x-correlation-id`
 - expose headers: `content-disposition`, `x-correlation-id`
@@ -1002,7 +1004,7 @@ $env:PUBLIC_COGNITO_SCOPES = "openid email profile"
 npm --prefix hexacode-frontend run build
 ```
 
-If you later want runtime-swappable frontend config without rebuilding, you can inject `window.__HEXACODE_ENV__`, but that is not wired as part of this walkthrough. Build-time env is the intended first deployment path.
+The frontend already supports runtime-swappable config through `window.__HEXACODE_ENV__`, but this historical walkthrough uses build-time env values. The current operator guide uses Terraform outputs for those values.
 
 ### S3 bucket settings
 
@@ -1047,7 +1049,7 @@ Attach that OAC to the S3 origin in the distribution.
 
 After you know the CloudFront distribution ID, add a bucket policy to `hexacode-prod-frontend` that allows only that distribution to read objects.
 
-Replace `DISTRIBUTION_ID` with the real CloudFront distribution ID:
+Replace `<distribution-id>` with the real CloudFront distribution ID from Terraform output:
 
 ```json
 {
@@ -1063,7 +1065,7 @@ Replace `DISTRIBUTION_ID` with the real CloudFront distribution ID:
       "Resource": "arn:aws:s3:::hexacode-prod-frontend/*",
       "Condition": {
         "StringEquals": {
-          "AWS:SourceArn": "arn:aws:cloudfront::380825342853:distribution/DISTRIBUTION_ID"
+          "AWS:SourceArn": "arn:aws:cloudfront::<account-id>:distribution/<distribution-id>"
         }
       }
     }
@@ -1116,8 +1118,9 @@ Why split the upload:
 After upload, invalidate at least the root document:
 
 ```powershell
+$env:CLOUDFRONT_DISTRIBUTION_ID = terraform -chdir=terraform output -raw cloudfront_distribution_id
 aws cloudfront create-invalidation `
-  --distribution-id DISTRIBUTION_ID `
+  --distribution-id $env:CLOUDFRONT_DISTRIBUTION_ID `
   --paths "/" "/index.html"
 ```
 
@@ -1147,13 +1150,15 @@ Before opening traffic:
 1. apply `hexacode-backend/db/new-app-schema.sql`
 2. verify all three API services return `200` on `/healthz`
 3. verify `worker` logs show queue polling without permission errors
-4. run the problem catalog import as a one-off job
+4. run the problem catalog import as a one-off ECS Fargate task
+5. have the first admin user sign in once through Cognito, then run the admin promotion as a one-off ECS Fargate task
 
-The import helper is:
+The helpers are:
 
 - [hexacode-backend/scripts/import_problem_catalog.py](../hexacode-backend/scripts/import_problem_catalog.py)
+- [hexacode-backend/scripts/promote_admin.py](../hexacode-backend/scripts/promote_admin.py)
 
-Do not bake the catalog import into container startup.
+Use the exact run-task commands in [aws-production-operator-guide.md](./aws-production-operator-guide.md). Do not bake catalog import or admin promotion into normal container startup, and do not make RDS public for bootstrap work.
 
 ## 20. Common Beginner Mistakes
 

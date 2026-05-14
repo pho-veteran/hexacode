@@ -1,16 +1,16 @@
-This document is the architecture and sizing reference for the AWS target. For the operator-facing step-by-step runbook, see [aws-deployment-walkthrough.md](./aws-deployment-walkthrough.md).
+This document is the architecture and sizing reference for the AWS target. For the operator-facing production runbook, see [aws-production-operator-guide.md](./aws-production-operator-guide.md).
 
 **1. Architecture Summary**
 Hexacode is a React SPA plus a FastAPI backend split into a thin API gateway, `identity-service`, `problem-service`, `submission-service`, a separate queue-polling `worker`, and an AWS `chat-lambda` for Bedrock-backed chat. Local infrastructure is PostgreSQL, Redis, MinIO, and ElasticMQ; the cloud target should preserve that shape with adapter swaps rather than an application rewrite.
 
 The real boundaries from code are: gateway does path routing/CORS/correlation IDs and simulates API Gateway HTTP API v2 for chat by invoking Lambda directly in local development; every backend service validates Cognito JWTs itself; `problem-service` owns problem authoring/read flows and problem-file storage; `submission-service` owns submissions/judge jobs/results and publishes judge jobs to SQS; `worker` consumes the queue, calls internal service APIs, executes code, and reports results back; `chat-lambda` accepts an API Gateway HTTP API v2 event, calls Bedrock, and returns a Lambda proxy response. `frontend` talks only to the gateway and authenticates directly against Cognito from the browser.
 
-Evidence: [docker-compose.local.yml](/C:/Users/thanh/Desktop/workspace/xbrain-courses/hexacode/docker-compose.local.yml), [route-manifest.json](/C:/Users/thanh/Desktop/workspace/xbrain-courses/hexacode/hexacode-backend/contracts/route-manifest.json), [new-app-schema.sql](/C:/Users/thanh/Desktop/workspace/xbrain-courses/hexacode/hexacode-backend/db/new-app-schema.sql), [api-gateway](/C:/Users/thanh/Desktop/workspace/xbrain-courses/hexacode/hexacode-backend/services/api-gateway/app/main.py), [chat-lambda](/C:/Users/thanh/Desktop/workspace/xbrain-courses/hexacode/hexacode-backend/services/chat-lambda/handler.py), [submission-service](/C:/Users/thanh/Desktop/workspace/xbrain-courses/hexacode/hexacode-backend/services/submission-service/app/main.py:1430), [worker](/C:/Users/thanh/Desktop/workspace/xbrain-courses/hexacode/hexacode-backend/services/worker/app/main.py), [frontend auth/client](/C:/Users/thanh/Desktop/workspace/xbrain-courses/hexacode/hexacode-frontend/src/lib/auth/cognito.ts:191).
+Evidence: [docker-compose.local.yml](../docker-compose.local.yml), [route-manifest.json](../hexacode-backend/contracts/route-manifest.json), [new-app-schema.sql](../hexacode-backend/db/new-app-schema.sql), [api-gateway](../hexacode-backend/services/api-gateway/app/main.py), [chat-lambda](../hexacode-backend/services/chat-lambda/handler.py), [submission-service](../hexacode-backend/services/submission-service/app/main.py:1430), [worker](../hexacode-backend/services/worker/app/main.py), [frontend auth/client](../hexacode-frontend/src/lib/auth/cognito.ts:191).
 
 **2. Service Breakdown**
 - `frontend`: React/Vite SPA. Public API calls are `/api/problems`, `/api/tags`, `/api/runtimes`, `/api/auth/me`, `/api/submissions*`, and dashboard routes via the gateway. Auth is direct browser-to-Cognito using the Cognito Identity Provider SDK; the SPA stores tokens in localStorage and sends `idToken` first as the bearer token.
-- `api-gateway`: Public backend entrypoint. Reads [route-manifest.json](/C:/Users/thanh/Desktop/workspace/hexacode/hexacode-backend/contracts/route-manifest.json) and proxies `/api/auth` and `/api/dashboard/users` to identity, `/api/problems`, `/api/tags`, `/api/dashboard/*` to problem, and `/api/submissions`, `/api/runtimes`, `/api/dashboard/operations` to submission. No DB, cache, queue, or JWT validation.
-- `api-gateway`: Public backend entrypoint. Reads [route-manifest.json](/C:/Users/thanh/Desktop/workspace/xbrain-courses/hexacode/hexacode-backend/contracts/route-manifest.json) and proxies `/api/auth` and `/api/dashboard/users` to identity, `/api/problems`, `/api/tags`, `/api/dashboard/*` to problem, and `/api/submissions`, `/api/runtimes`, `/api/dashboard/operations` to submission. For `/api/chat/*`, local development simulates AWS API Gateway HTTP API v2 by building the Lambda event shape and invoking the configured Lambda directly. No DB, cache, or JWT validation.
+- `api-gateway`: Public backend entrypoint. Reads [route-manifest.json](../hexacode-backend/contracts/route-manifest.json) and proxies `/api/auth` and `/api/dashboard/users` to identity, `/api/problems`, `/api/tags`, `/api/dashboard/*` to problem, and `/api/submissions`, `/api/runtimes`, `/api/dashboard/operations` to submission. No DB, cache, queue, or JWT validation.
+- `api-gateway`: Public backend entrypoint. Reads [route-manifest.json](../hexacode-backend/contracts/route-manifest.json) and proxies `/api/auth` and `/api/dashboard/users` to identity, `/api/problems`, `/api/tags`, `/api/dashboard/*` to problem, and `/api/submissions`, `/api/runtimes`, `/api/dashboard/operations` to submission. For `/api/chat/*`, local development simulates AWS API Gateway HTTP API v2 by building the Lambda event shape and invoking the configured Lambda directly. No DB, cache, or JWT validation.
 - `identity-service`: Responsibilities are `/api/auth/me`, dashboard user directory, enable/disable users, and role grant/revoke. Dependencies are PostgreSQL and Cognito JWKS. Logical ownership is `app_identity.*`; it also reads counts from `problem.problems` and `submission.submissions` for dashboard summaries.
 - `problem-service`: Public APIs are `/api/problems`, `/api/problems/{slug}`, `/api/problems/{slug}/solve`, `/api/problems/{slug}/files/{object_id}`, `/api/tags`. Dashboard APIs cover problems, tags, testsets, testcase edits, lifecycle actions, and storage orphan cleanup. Internal APIs are `/internal/problems/{problem_id}/judge-context`, `/internal/checkers/{checker_id}/compiled-artifact`, and `/internal/cache/public-problems/invalidate`. Dependencies are PostgreSQL, Redis, Cognito JWKS, and the problems S3-compatible bucket. Logical ownership is `problem.*` plus most problem-related `storage.objects` rows.
 - `submission-service`: Public APIs are `/api/runtimes`, `/api/submissions`, `/api/submissions/{id}`, `/api/submissions/{id}/source`, `/api/submissions/{id}/results`, `/api/submissions/{id}/files/{object_id}`, and `/api/dashboard/operations`. Internal APIs are `/internal/runtimes/{profile_key}`, `/internal/judge-jobs/{job_id}/context`, `/started`, and `/completed`. Dependencies are PostgreSQL, SQS, Cognito JWKS, internal HTTP call to problem-service for cache invalidation, and S3 read paths for submission files. Logical ownership is `submission.*`; it also updates `problem.problem_stats`.
@@ -101,22 +101,28 @@ Storage and async
 Egress
   |
   +--> NAT / endpoints for Cognito JWKS, ECR, CloudWatch, Secrets Manager, SQS, S3
+
+Chat AI
+  |
+  +--> API Gateway /api/chat/messages -> chat Lambda
+  +--> Bedrock Agent + Knowledge Base -> OpenSearch Serverless vector index
 ```
 
 **6. Deployment Plan (step-by-step)**
 1. Provision the network first: VPC, two AZs, public subnets for NAT, private app subnets for ECS/internal ALB, private data subnets for RDS/Redis, route tables, NAT gateways, and VPC endpoints where used.
 2. Provision managed stateful services: RDS PostgreSQL 16, ElastiCache Redis, S3 buckets, SQS queue plus DLQ, Secrets Manager parameters/secrets, and Cognito User Pool/App Client.
-3. Use the existing ECR repository `prod/hexacode` for backend images. Do not containerize the frontend for prod; build static assets instead.
+3. Use the Terraform-managed ECR repository `prod/hexacode` for backend images. Do not containerize the frontend for prod; build static assets instead.
 4. Build and push backend images from `hexacode-backend/`. Store all backend services in `prod/hexacode` and distinguish them with service-prefixed tags such as `identity-service-<gitsha>` and `problem-service-<gitsha>`. The catalog import helper now lives under the backend workspace as `hexacode-backend/scripts/import_problem_catalog.py`, so `problem-service` no longer needs repo-root build context.
-5. Create the ECS Fargate cluster, CloudWatch log groups, one shared execution role, and one task role per service. Use private subnets only and disable public IP assignment. In AWS, leave `S3_ENDPOINT` and `SQS_ENDPOINT` empty so boto3 uses native AWS endpoints, leave `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` unset so tasks use IAM roles, and set `AWS_REGION` to the deployment region. Inject `DATABASE_URL` through ECS secrets, keep `COGNITO_*`, `S3_BUCKET_*`, `SQS_JUDGE_QUEUE_URL`, and internal service base URLs as normal env vars, and only set `REDIS_URL` for `problem-service`. See [aws-deployment-walkthrough.md](./aws-deployment-walkthrough.md) for the concrete task-definition shape.
+5. Create the ECS Fargate cluster, CloudWatch log groups, one shared execution role, and one task role per service. Use private subnets only and disable public IP assignment. In AWS, leave `S3_ENDPOINT` and `SQS_ENDPOINT` empty so boto3 uses native AWS endpoints, leave `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` unset so tasks use IAM roles, and set `AWS_REGION` to the deployment region. Inject `DATABASE_URL` through ECS secrets, keep `COGNITO_*`, `S3_BUCKET_*`, `SQS_JUDGE_QUEUE_URL`, and internal service base URLs as normal env vars, and only set `REDIS_URL` for `problem-service`. See [aws-production-operator-guide.md](./aws-production-operator-guide.md) for the concrete deployment flow.
 6. Create an internal ALB with path-based rules matching the repo route manifest. Attach separate target groups for identity, problem, and submission services; use `/healthz` health checks.
 7. Deploy `identity-service`, `problem-service`, and `submission-service` as separate ECS services behind the ALB. Set internal service URL env vars to the internal ALB DNS name so service-to-service calls and worker callbacks use the same private entrypoint.
 8. Create API Gateway HTTP API with one VPC Link to the internal ALB. Mirror the route manifest prefixes as API Gateway routes, enable CORS for the frontend domain, and enable access logs.
 9. Add a dedicated `POST /api/chat/messages` route in API Gateway HTTP API that integrates directly with the deployed `chat-lambda` instead of forwarding that route through the internal ALB.
 10. Deploy the worker as a separate ECS service with no load balancer. Wire it to the SQS queue URL, internal ALB DNS for `PROBLEM_SERVICE_URL` and `SUBMISSION_SERVICE_URL`, and a distinct task role.
 11. Run database bootstrap as a controlled one-off deployment step before traffic cutover. The services also attempt schema bootstrap on startup today, but production should still execute `new-app-schema.sql` first to reduce startup-time DDL races.
-12. Run the curated problem import as a separate admin job. The repo’s import remains script-driven and depends on `data/problems/`; execute it from CI/CodeBuild or a one-off ECS/runner job that has the repo checkout or a packaged catalog artifact.
-13. Build the frontend with `npm --prefix hexacode-frontend run build`, upload `hexacode-frontend/dist` to the frontend S3 bucket, front it with CloudFront, and set public env values so `apiBaseUrl` points to the API Gateway custom domain and Cognito settings point to the production User Pool/App Client.
+12. Run the curated problem import and first-admin promotion as one-off ECS Fargate tasks in private app subnets. Do not make RDS public for these bootstrap operations.
+13. Use Client VPN for approved human database access to the private RDS Proxy endpoint. Treat Session Manager as fallback/break-glass access, not the regular developer path.
+14. Build the frontend with `npm --prefix hexacode-frontend run build`, upload `hexacode-frontend/dist` to the frontend S3 bucket, front it with CloudFront, and set public env values so `apiBaseUrl` points to the API Gateway custom domain and Cognito settings point to the production User Pool/App Client.
 14. Add observability before go-live: API Gateway access logs, ALB access logs or metrics, ECS service logs, Lambda logs/metrics, RDS enhanced monitoring, Redis metrics, SQS backlog alarms, and ECS autoscaling policies. Preserve the app’s `x-correlation-id` across API Gateway, ALB, Lambda, services, and worker logs.
 
 **7. Risks & Recommendations**
@@ -132,14 +138,14 @@ Egress
 **8. Infrastructure Specification (Terraform-ready level)**
 
 **8.1 VPC Design**
-- Region assumption: `ap-southeast-1`; keep all AZ/resource names consistent if you choose another region.
-- `vpc_cidr`: `10.20.0.0/16`
-- `public_subnet_a`: `10.20.0.0/24` in `ap-southeast-1a`
-- `public_subnet_b`: `10.20.1.0/24` in `ap-southeast-1b`
-- `private_app_subnet_a`: `10.20.10.0/24` in `ap-southeast-1a`
-- `private_app_subnet_b`: `10.20.11.0/24` in `ap-southeast-1b`
-- `private_data_subnet_a`: `10.20.20.0/24` in `ap-southeast-1a`
-- `private_data_subnet_b`: `10.20.21.0/24` in `ap-southeast-1b`
+- Region assumption: `us-west-2`; keep all AZ/resource names consistent if you choose another region.
+- `cidr_block`: `10.20.0.0/16`
+- `public_subnet_a`: `10.20.0.0/24` in `us-west-2a`
+- `public_subnet_b`: `10.20.1.0/24` in `us-west-2b`
+- `private_app_subnet_a`: `10.20.10.0/24` in `us-west-2a`
+- `private_app_subnet_b`: `10.20.11.0/24` in `us-west-2b`
+- `private_data_subnet_a`: `10.20.20.0/24` in `us-west-2a`
+- `private_data_subnet_b`: `10.20.21.0/24` in `us-west-2b`
 - Internet Gateway attached to VPC.
 - Prefer AWS's Regional NAT Gateway option in the current VPC wizard. If you build the VPC manually instead, one NAT per public subnet remains a valid multi-AZ fallback.
 - Public route table: `0.0.0.0/0 -> igw`
@@ -207,9 +213,9 @@ Egress
 - Cluster: `hexacode-${env}` using ECS Fargate
 - Runtime platform: use `LINUX/X86_64` for all services, especially the worker, because it compiles and executes native binaries inside the container
 - `identity-service` task: `cpu=256`, `memory=512`, desired count `2`, autoscale `2-4` on `CPUUtilization > 60%`
-- `problem-service` task: `cpu=512`, `memory=1024`, desired count `2`, autoscale `2-6` on `CPUUtilization > 60%` or `MemoryUtilization > 75%`
-- `submission-service` task: `cpu=512`, `memory=1024`, desired count `2`, autoscale `2-6` on `CPUUtilization > 60%` or `MemoryUtilization > 75%`
-- `worker` task: `cpu=2048`, `memory=4096`, desired count `1`, autoscale `1-20` on SQS backlog with target `<= 1 visible message per running task`
+- `problem-service` task: `cpu=512`, `memory=2048`, desired count `2`, autoscale `2-8` on `CPUUtilization > 60%` or `MemoryUtilization > 75%`
+- `submission-service` task: `cpu=512`, `memory=1024`, desired count `2`, autoscale `2-8` on `CPUUtilization > 60%` or `MemoryUtilization > 75%`
+- `worker` task: `cpu=1024`, `memory=2048`, autoscale `1-20` on SQS backlog; Terraform may bootstrap a higher desired count, but Application Auto Scaling can scale it down to the minimum when the queue is empty
 - Health checks: API services use `/healthz`; worker has no LB health check, only ECS task health and log/metric alarms
 - Deployment settings: rolling deploy with ECS deployment circuit breaker enabled, `minimum_healthy_percent=100`, `maximum_percent=200`
 - Environment/secrets injection:
@@ -219,4 +225,4 @@ Egress
   - Leave `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` unset in AWS so boto3 uses the ECS task role
   - Service URLs: set `PROBLEM_SERVICE_URL` and `SUBMISSION_SERVICE_URL` to the internal ALB base URL where needed; `IDENTITY_SERVICE_URL` is only needed if you deploy the local gateway container, which the AWS target does not require
   - Worker-specific: `WORKER_NAME`, `WORKER_VERSION`, `WORKER_POLL_INTERVAL_SECONDS`
-  - See [aws-deployment-walkthrough.md](./aws-deployment-walkthrough.md) for service-by-service task definition examples
+  - See [aws-production-operator-guide.md](./aws-production-operator-guide.md) for the production deployment sequence and runtime checks

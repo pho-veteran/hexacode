@@ -97,7 +97,7 @@ try {
     Write-Host "[dry-run] Registry: $registry"
     Write-Host "[dry-run] Repository: $Repository"
     Write-Host "[dry-run] Tag suffix: $TagSuffix"
-  } else {
+  } elseif (-not $SkipPush) {
     Invoke-Step "Verify ECR repository '$Repository'" {
       & aws ecr describe-repositories --region $Region --repository-names $Repository | Out-Null
       if ($LASTEXITCODE -ne 0) {
@@ -107,11 +107,7 @@ try {
 
     if (-not $SkipLogin) {
       Invoke-Step "Login Docker to ECR" {
-        $password = & aws ecr get-login-password --region $Region
-        if ($LASTEXITCODE -ne 0 -or -not $password) {
-          throw "Unable to get ECR login password."
-        }
-        $password | docker login --username AWS --password-stdin $registry
+        & aws ecr get-login-password --region $Region | docker login --username AWS --password-stdin $registry
         if ($LASTEXITCODE -ne 0) {
           throw "Docker login to ECR failed."
         }
@@ -166,6 +162,7 @@ try {
   }
 
   if ($DryRun) {
+    Write-Host "Terraform image_tag value: $TagSuffix"
     Write-Host "[dry-run] Completed."
     return
   }
@@ -177,6 +174,7 @@ try {
     foreach ($image in $pushedImages) {
       Write-Host " - $image"
     }
+    Write-Host "Terraform image_tag value: $TagSuffix"
   }
 }
 finally {

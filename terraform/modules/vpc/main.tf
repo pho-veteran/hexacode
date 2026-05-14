@@ -80,24 +80,21 @@ resource "aws_subnet" "private_data" {
   }
 }
 
-# NAT Gateways (one per AZ)
+# NAT Gateway
 resource "aws_eip" "nat" {
-  count  = length(var.availability_zones)
   domain = "vpc"
 
   tags = {
-    Name = "${local.name_prefix}-nat-eip-${var.availability_zones[count.index]}"
+    Name = "${local.name_prefix}-nat-eip"
   }
 }
 
 resource "aws_nat_gateway" "main" {
-  count = length(var.availability_zones)
-
-  allocation_id = aws_eip.nat[count.index].id
-  subnet_id     = aws_subnet.public[count.index].id
+  allocation_id = aws_eip.nat.id
+  subnet_id     = aws_subnet.public[0].id
 
   tags = {
-    Name = "${local.name_prefix}-nat-${var.availability_zones[count.index]}"
+    Name = "${local.name_prefix}-nat"
   }
 
   depends_on = [aws_internet_gateway.main]
@@ -124,7 +121,7 @@ resource "aws_route_table_association" "public" {
   route_table_id = aws_route_table.public.id
 }
 
-# Private app route tables (one per AZ, routed to the NAT in the same AZ)
+# Private app route tables
 resource "aws_route_table" "private_app" {
   count = length(var.availability_zones)
 
@@ -132,7 +129,7 @@ resource "aws_route_table" "private_app" {
 
   route {
     cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.main[count.index].id
+    nat_gateway_id = aws_nat_gateway.main.id
   }
 
   tags = {
@@ -147,7 +144,7 @@ resource "aws_route_table_association" "private_app" {
   route_table_id = aws_route_table.private_app[count.index].id
 }
 
-# Private data route tables (one per AZ, routed to the NAT in the same AZ)
+# Private data route tables
 resource "aws_route_table" "private_data" {
   count = length(var.availability_zones)
 
@@ -155,7 +152,7 @@ resource "aws_route_table" "private_data" {
 
   route {
     cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.main[count.index].id
+    nat_gateway_id = aws_nat_gateway.main.id
   }
 
   tags = {

@@ -12,6 +12,8 @@ import {
   loginWithPassword,
   performGlobalSignOut,
   readStoredSession,
+  refreshStoredSession,
+  sessionNeedsRefresh,
   SESSION_STORAGE_KEY,
   type AuthSession,
   type PasswordLoginResult,
@@ -53,13 +55,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<AuthMe | null>(null);
   const requestIdRef = useRef(0);
 
-  const apply = useCallback(async (s: AuthSession | null) => {
+  const apply = useCallback(async (s: AuthSession | null, retried = false) => {
     const requestId = ++requestIdRef.current;
-    setSessionState(s);
-    setAccessToken(getApiBearerToken(s));
+    let activeSession = s;
+
+    if (sessionNeedsRefresh(activeSession)) {
+      try {
+        activeSession = await refreshStoredSession(env, activeSession);
+      } catch {
+        clearStoredSession();
+        activeSession = null;
+      }
+    }
+
+    setSessionState(activeSession);
+    setAccessToken(getApiBearerToken(activeSession));
     setProfile(null);
 
-    if (!s) {
+    if (!activeSession) {
       setAuthzLoading(false);
       setStatus("anonymous");
       return;
@@ -74,6 +87,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       if (requestIdRef.current !== requestId) return;
       const statusCode = (error as Error & { status?: number }).status;
+      if (statusCode === 401 && !retried) {
+        try {
+          const refreshedSession = await refreshStoredSession(env, activeSession);
+          if (requestIdRef.current !== requestId) return;
+          await apply(refreshedSession, true);
+          return;
+        } catch {
+          // fall through to local sign-out
+        }
+      }
       if (statusCode === 401) {
         clearStoredSession();
         setSessionState(null);
@@ -84,7 +107,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       if (requestIdRef.current === requestId) setAuthzLoading(false);
     }
-  }, []);
+  }, [env]);
 
   useEffect(() => {
     void apply(readStoredSession());

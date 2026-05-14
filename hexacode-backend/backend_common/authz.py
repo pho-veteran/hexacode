@@ -154,6 +154,18 @@ def require_local_any_permission(
         raise HTTPException(status_code=403, detail=detail)
 
 
+def require_owner_or_local_any_permission(
+    local_user: dict[str, Any],
+    owner_user_id: str,
+    permission_codes: Iterable[str],
+    *,
+    detail: str,
+) -> None:
+    if str(local_user.get("id")) == str(owner_user_id):
+        return
+    require_local_any_permission(local_user, permission_codes, detail=detail)
+
+
 def normalize_manageable_role_code(role_code: str) -> str:
     normalized = str(role_code or "").strip().lower()
     if normalized not in MANAGEABLE_ROLE_CODES:

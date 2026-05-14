@@ -37,3 +37,13 @@ output "worker_service_desired_count" {
   description = "Desired task count for worker"
   value       = aws_ecs_service.worker.desired_count
 }
+
+output "problem_task_definition_arn" {
+  description = "Problem service task definition ARN"
+  value       = aws_ecs_task_definition.problem_service.arn
+}
+
+output "identity_task_definition_arn" {
+  description = "Identity service task definition ARN"
+  value       = aws_ecs_task_definition.identity_service.arn
+}

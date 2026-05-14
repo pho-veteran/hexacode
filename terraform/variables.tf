@@ -1,7 +1,7 @@
 variable "region" {
   description = "AWS region"
   type        = string
-  default     = "ap-southeast-1"
+  default     = "us-west-2"
 }
 
 variable "environment" {
@@ -45,10 +45,10 @@ variable "application_secret_arn" {
   default     = ""
 }
 
-variable "ecr_repository_url" {
-  description = "ECR repository URL for Hexacode images"
+variable "ecr_repository_name" {
+  description = "ECR repository name for Hexacode images"
   type        = string
-  default     = ""
+  default     = "prod/hexacode"
 }
 
 variable "image_tag" {
@@ -58,7 +58,7 @@ variable "image_tag" {
 }
 
 variable "chat_lambda_arn" {
-  description = "ARN of the deployed chat Lambda function"
+  description = "Optional external chat Lambda ARN. Leave empty to use Terraform-managed Bedrock chat."
   type        = string
   default     = ""
 }
@@ -77,6 +77,30 @@ variable "cors_lambda_arn" {
 
 variable "kms_key_arn" {
   description = "KMS key ARN for Secrets Manager if CMK-backed"
+  type        = string
+  default     = ""
+}
+
+variable "client_vpn_enabled" {
+  description = "Create AWS Client VPN for approved human database access"
+  type        = bool
+  default     = false
+}
+
+variable "client_vpn_cidr_block" {
+  description = "Client VPN CIDR block"
+  type        = string
+  default     = "10.30.0.0/22"
+}
+
+variable "client_vpn_server_certificate_arn" {
+  description = "ACM ARN for the Client VPN server certificate"
+  type        = string
+  default     = ""
+}
+
+variable "client_vpn_root_certificate_chain_arn" {
+  description = "ACM ARN for the Client VPN root client certificate"
   type        = string
   default     = ""
 }

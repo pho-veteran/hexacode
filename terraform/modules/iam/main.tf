@@ -32,8 +32,6 @@ resource "aws_iam_role_policy_attachment" "ecs_execution_managed" {
 
 # Secrets Manager access for ECS execution role (pulled by containers at startup)
 resource "aws_iam_policy" "ecs_execution_secrets" {
-  count = var.application_secret_arn != "" ? 1 : 0
-
   name = "hexacode-${local.environment}-ecs-execution-secrets"
 
   policy = jsonencode({
@@ -49,10 +47,8 @@ resource "aws_iam_policy" "ecs_execution_secrets" {
 }
 
 resource "aws_iam_role_policy_attachment" "ecs_execution_secrets" {
-  count = var.application_secret_arn != "" ? 1 : 0
-
   role       = aws_iam_role.ecs_execution.name
-  policy_arn = aws_iam_policy.ecs_execution_secrets[0].arn
+  policy_arn = aws_iam_policy.ecs_execution_secrets.arn
 }
 
 # KMS Decrypt for ECS execution role (needed when Secrets Manager uses a CMK)

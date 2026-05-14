@@ -1,60 +1,53 @@
 # Hexacode ECR Guide
 
-This guide shows how to push this project's backend container images to Amazon ECR in a way that a beginner can follow.
+This guide shows how to push Hexacode backend container images to Amazon ECR.
 
-It is written for this repository specifically, not as a generic AWS tutorial.
-
-This guide assumes your ECR repository already exists and is named:
-
-- `prod/hexacode`
+Terraform manages the ECR repository. Create or update the repository through the Terraform workflow before relying on it for production ECS task definitions.
 
 ## What ECR Is
 
-Amazon ECR is AWS's private Docker image registry.
-
-You build Docker images on your machine, push them to ECR, and then services like ECS pull those images to run your app.
+Amazon ECR is AWS's private Docker image registry. You build Docker images locally or in CI, push them to ECR, and ECS Fargate pulls those images to run the backend services.
 
 ## What Goes To ECR In This Repo
 
-For this project, push these backend images to ECR:
+Push these backend images to the shared repository named by Terraform `ecr_repository_name`, defaulting to `prod/hexacode`:
 
 - `identity-service`
 - `problem-service`
 - `submission-service`
 - `worker`
 
-In your AWS account, all four images will be stored in the same ECR repository:
-
-- repository: `prod/hexacode`
-
-Because one repository is shared by multiple services, the image tags must include the service name.
-
-Examples:
+Because all four services share one repository, image tags include the service name:
 
 - `identity-service-abc1234`
 - `problem-service-abc1234`
 - `submission-service-abc1234`
 - `worker-abc1234`
 
-Do not use ECR for the production frontend in this repo.
-
-The frontend should be built as static files and deployed to S3 + CloudFront instead.
-
-Also note that the local `gateway` container is useful for local development, but the intended cloud target in this repo is AWS API Gateway rather than shipping that local gateway container as the main production entrypoint.
+Do not use ECR for the production frontend. Build the frontend as static files and deploy it to S3 + CloudFront.
 
 ## Before You Start
 
 You need:
 
-- an AWS account
-- an IAM user or role that can use ECR
-- AWS CLI v2 installed
+- AWS CLI v2 configured for the target account and region
 - Docker Desktop installed and running
-- access to this repo on your machine
+- Terraform applied far enough to create the ECR repository
+- access to this repo from its root directory
+
+Check AWS and Docker:
+
+```powershell
+aws sts get-caller-identity
+aws configure get region
+docker version
+```
+
+For the current production target, use `us-west-2` unless the deployment owner intentionally changes `terraform.tfvars`.
 
 ## Required IAM Permissions
 
-At minimum, the AWS identity that pushes images should be able to:
+The identity that pushes images needs:
 
 - `ecr:GetAuthorizationToken`
 - `ecr:DescribeRepositories`
@@ -65,87 +58,67 @@ At minimum, the AWS identity that pushes images should be able to:
 - `ecr:PutImage`
 - `ecr:BatchGetImage`
 
-`ecr:CreateRepository` is only needed if you want this guide to create a new ECR repository. It is not required for your current setup because `prod/hexacode` already exists.
-
-If someone else manages AWS for you, ask them for ECR push access in the target AWS account and region.
+`ecr:CreateRepository`, `ecr:PutLifecyclePolicy`, and repository-management permissions belong to the Terraform operator, not the routine image-push identity.
 
 ## Repo-Specific Build Contexts
 
-This repo does not build every service from the same directory.
+Backend production images use service-specific Dockerfiles, but the required build context differs by service:
 
-That matters a lot.
-
-Use these exact Docker build contexts:
-
-- `identity-service`: build from `./hexacode-backend`
-- `problem-service`: build from `./hexacode-backend`
-- `submission-service`: build from `./hexacode-backend`
-- `worker`: build from `./hexacode-backend`
+- `identity-service`: `./hexacode-backend`
+- `problem-service`: repo root `.` because the image includes the curated `data/problems` catalog for one-off seed tasks
+- `submission-service`: `./hexacode-backend`
+- `worker`: `./hexacode-backend`
 
 If you use the wrong build context, Docker may fail because files expected by the Dockerfile are missing.
 
-## Step 1: Open PowerShell In The Repo Root
+## Fast Path: Use The Repo Script
 
-Open PowerShell in:
+From the repo root:
 
 ```powershell
-C:\Users\thanh\Desktop\workspace\xbrain-courses\hexacode
+$env:AWS_REGION = "us-west-2"
+$env:IMAGE_TAG = (git rev-parse --short HEAD).Trim()
+powershell -ExecutionPolicy Bypass -File scripts/push-ecr.ps1 -Region $env:AWS_REGION -TagSuffix $env:IMAGE_TAG
 ```
 
-## Step 2: Configure AWS CLI
-
-If AWS CLI is not configured yet:
+Push only one service:
 
 ```powershell
-aws configure
+powershell -ExecutionPolicy Bypass -File scripts/push-ecr.ps1 -Region $env:AWS_REGION -Service problem-service -TagSuffix $env:IMAGE_TAG
 ```
 
-You will usually enter:
-
-- AWS Access Key ID
-- AWS Secret Access Key
-- default region, for example `ap-southeast-1`
-- output format, for example `json`
-
-Check that AWS CLI works:
+Preview commands without running them:
 
 ```powershell
-aws sts get-caller-identity
+powershell -ExecutionPolicy Bypass -File scripts/push-ecr.ps1 -Region $env:AWS_REGION -TagSuffix $env:IMAGE_TAG -DryRun
 ```
 
-If that command fails, stop here and fix AWS credentials first.
+The script:
 
-## Step 3: Set Your Region And Get Your AWS Account ID
+- reads the target account with `aws sts get-caller-identity`
+- uses the shared ECR repository `prod/hexacode` unless overridden
+- builds each backend service with the correct context; `problem-service` uses the repo root so the seed catalog is packaged
+- tags images as `<service>-<tagSuffix>`
+- logs Docker into ECR unless you pass `-SkipLogin`
 
-Run:
+Set Terraform `image_tag` to the same suffix before planning ECS changes:
+
+```hcl
+image_tag = "abc1234"
+```
+
+## Manual Push Workflow
+
+Set common values:
 
 ```powershell
-$env:AWS_REGION = "ap-southeast-1"
+$env:AWS_REGION = "us-west-2"
 $ACCOUNT_ID = (aws sts get-caller-identity --query Account --output text).Trim()
 $GIT_SHA = (git rev-parse --short HEAD).Trim()
 $REPOSITORY = "prod/hexacode"
 ```
 
-What these values mean:
-
-- `$env:AWS_REGION`: the AWS region where your ECR repositories live
-- `$ACCOUNT_ID`: your AWS account ID
-- `$GIT_SHA`: the current git commit short SHA
-- `$REPOSITORY`: your existing ECR repository name
-
-If you do not want to use git SHA tags, you can replace `$GIT_SHA` with something simple like:
-
-```powershell
-$GIT_SHA = "dev-001"
-```
-
-## Step 4: Confirm The ECR Repository Exists
-
-Your repo already uses one shared ECR repository:
-
-- `prod/hexacode`
-
-Check that it exists:
+Confirm the Terraform-managed repository exists:
 
 ```powershell
 aws ecr describe-repositories `
@@ -153,192 +126,41 @@ aws ecr describe-repositories `
   --repository-names $REPOSITORY
 ```
 
-If this fails, either:
-
-- the repo name is wrong
-- the repo is in a different region
-- your AWS identity cannot access it
-
-## Fast Path: Use The Repo Script
-
-This repo now includes a helper script:
-
-- [scripts/push-ecr.ps1](</C:/Users/thanh/Desktop/workspace/xbrain-courses/hexacode/scripts/push-ecr.ps1>)
-
-Push all backend images:
-
-```powershell
-.\scripts\push-ecr.ps1 -Region ap-southeast-1
-```
-
-Push only one service:
-
-```powershell
-.\scripts\push-ecr.ps1 -Region ap-southeast-1 -Service problem-service
-```
-
-Use a custom tag suffix:
-
-```powershell
-.\scripts\push-ecr.ps1 -Region ap-southeast-1 -TagSuffix release-001
-```
-
-Preview commands without running them:
-
-```powershell
-.\scripts\push-ecr.ps1 -Region ap-southeast-1 -DryRun
-```
-
-The script:
-
-- uses the existing ECR repository `prod/hexacode`
-- builds all backend services from `./hexacode-backend`
-- tags images as `<service>-<tagSuffix>`
-- logs Docker into ECR unless you pass `-SkipLogin`
-
-The rest of this guide shows the same workflow manually.
-
-## Step 5: Log Docker Into ECR
-
-Run:
+Log Docker into ECR:
 
 ```powershell
 aws ecr get-login-password --region $env:AWS_REGION |
   docker login --username AWS --password-stdin "$ACCOUNT_ID.dkr.ecr.$env:AWS_REGION.amazonaws.com"
 ```
 
-Important:
-
-- this login token is temporary
-- if pushing later fails with auth errors, just run this command again
-
-## Step 6: Build And Push `identity-service`
-
-Set the service-specific tag:
+Build, tag, and push one service:
 
 ```powershell
-$TAG = "identity-service-$GIT_SHA"
-```
+$SERVICE = "problem-service"
+$TAG = "$SERVICE-$GIT_SHA"
 
-Build:
+$BUILD_CONTEXT = if ($SERVICE -eq "problem-service") { "." } else { "./hexacode-backend" }
 
-```powershell
 docker build `
-  -f hexacode-backend/services/identity-service/Dockerfile `
-  -t identity-service:$TAG `
-  ./hexacode-backend
-```
+  -f "hexacode-backend/services/$SERVICE/Dockerfile" `
+  -t "$SERVICE`:$TAG" `
+  $BUILD_CONTEXT
 
-Tag for ECR:
-
-```powershell
 docker tag `
-  identity-service:$TAG `
-  "$ACCOUNT_ID.dkr.ecr.$env:AWS_REGION.amazonaws.com/$REPOSITORY:$TAG"
+  "$SERVICE`:$TAG" `
+  "$ACCOUNT_ID.dkr.ecr.$env:AWS_REGION.amazonaws.com/$REPOSITORY`:$TAG"
+
+docker push "$ACCOUNT_ID.dkr.ecr.$env:AWS_REGION.amazonaws.com/$REPOSITORY`:$TAG"
 ```
 
-Push:
+Repeat for:
 
-```powershell
-docker push "$ACCOUNT_ID.dkr.ecr.$env:AWS_REGION.amazonaws.com/$REPOSITORY:$TAG"
-```
+- `identity-service`
+- `problem-service`
+- `submission-service`
+- `worker`
 
-## Step 7: Build And Push `problem-service`
-
-Set the service-specific tag:
-
-```powershell
-$TAG = "problem-service-$GIT_SHA"
-```
-
-Build:
-
-```powershell
-docker build `
-  -f ./hexacode-backend/services/problem-service/Dockerfile `
-  -t problem-service:$TAG `
-  ./hexacode-backend
-```
-
-Tag for ECR:
-
-```powershell
-docker tag `
-  problem-service:$TAG `
-  "$ACCOUNT_ID.dkr.ecr.$env:AWS_REGION.amazonaws.com/$REPOSITORY:$TAG"
-```
-
-Push:
-
-```powershell
-docker push "$ACCOUNT_ID.dkr.ecr.$env:AWS_REGION.amazonaws.com/$REPOSITORY:$TAG"
-```
-
-## Step 8: Build And Push `submission-service`
-
-Set the service-specific tag:
-
-```powershell
-$TAG = "submission-service-$GIT_SHA"
-```
-
-Build:
-
-```powershell
-docker build `
-  -f hexacode-backend/services/submission-service/Dockerfile `
-  -t submission-service:$TAG `
-  ./hexacode-backend
-```
-
-Tag for ECR:
-
-```powershell
-docker tag `
-  submission-service:$TAG `
-  "$ACCOUNT_ID.dkr.ecr.$env:AWS_REGION.amazonaws.com/$REPOSITORY:$TAG"
-```
-
-Push:
-
-```powershell
-docker push "$ACCOUNT_ID.dkr.ecr.$env:AWS_REGION.amazonaws.com/$REPOSITORY:$TAG"
-```
-
-## Step 9: Build And Push `worker`
-
-Set the service-specific tag:
-
-```powershell
-$TAG = "worker-$GIT_SHA"
-```
-
-Build:
-
-```powershell
-docker build `
-  -f hexacode-backend/services/worker/Dockerfile `
-  -t worker:$TAG `
-  ./hexacode-backend
-```
-
-Tag for ECR:
-
-```powershell
-docker tag `
-  worker:$TAG `
-  "$ACCOUNT_ID.dkr.ecr.$env:AWS_REGION.amazonaws.com/$REPOSITORY:$TAG"
-```
-
-Push:
-
-```powershell
-docker push "$ACCOUNT_ID.dkr.ecr.$env:AWS_REGION.amazonaws.com/$REPOSITORY:$TAG"
-```
-
-## Step 10: Verify Your Images In ECR
-
-Check the shared repository:
+## Verify Images In ECR
 
 ```powershell
 aws ecr describe-images `
@@ -346,80 +168,24 @@ aws ecr describe-images `
   --repository-name $REPOSITORY
 ```
 
-Or open the AWS Console:
-
-- AWS Console
-- Amazon ECR
-- Repositories
-- click `prod/hexacode`
-- confirm your service tags exist
-
-## One Copy-Paste Script For All Four Images
-
-If you want a single block to run:
-
-```powershell
-$env:AWS_REGION = "ap-southeast-1"
-$ACCOUNT_ID = (aws sts get-caller-identity --query Account --output text).Trim()
-$GIT_SHA = (git rev-parse --short HEAD).Trim()
-$REPOSITORY = "prod/hexacode"
-
-aws ecr get-login-password --region $env:AWS_REGION |
-  docker login --username AWS --password-stdin "$ACCOUNT_ID.dkr.ecr.$env:AWS_REGION.amazonaws.com"
-
-$TAG = "identity-service-$GIT_SHA"
-docker build -f hexacode-backend/services/identity-service/Dockerfile -t identity-service:$TAG ./hexacode-backend
-docker tag identity-service:$TAG "$ACCOUNT_ID.dkr.ecr.$env:AWS_REGION.amazonaws.com/$REPOSITORY:$TAG"
-docker push "$ACCOUNT_ID.dkr.ecr.$env:AWS_REGION.amazonaws.com/$REPOSITORY:$TAG"
-
-$TAG = "problem-service-$GIT_SHA"
-docker build -f ./hexacode-backend/services/problem-service/Dockerfile -t problem-service:$TAG ./hexacode-backend
-docker tag problem-service:$TAG "$ACCOUNT_ID.dkr.ecr.$env:AWS_REGION.amazonaws.com/$REPOSITORY:$TAG"
-docker push "$ACCOUNT_ID.dkr.ecr.$env:AWS_REGION.amazonaws.com/$REPOSITORY:$TAG"
-
-$TAG = "submission-service-$GIT_SHA"
-docker build -f hexacode-backend/services/submission-service/Dockerfile -t submission-service:$TAG ./hexacode-backend
-docker tag submission-service:$TAG "$ACCOUNT_ID.dkr.ecr.$env:AWS_REGION.amazonaws.com/$REPOSITORY:$TAG"
-docker push "$ACCOUNT_ID.dkr.ecr.$env:AWS_REGION.amazonaws.com/$REPOSITORY:$TAG"
-
-$TAG = "worker-$GIT_SHA"
-docker build -f hexacode-backend/services/worker/Dockerfile -t worker:$TAG ./hexacode-backend
-docker tag worker:$TAG "$ACCOUNT_ID.dkr.ecr.$env:AWS_REGION.amazonaws.com/$REPOSITORY:$TAG"
-docker push "$ACCOUNT_ID.dkr.ecr.$env:AWS_REGION.amazonaws.com/$REPOSITORY:$TAG"
-```
-
-## How ECS Uses These Images Later
-
-After pushing, ECS task definitions should use image values like:
+Expected image URI shape:
 
 ```text
-123456789012.dkr.ecr.ap-southeast-1.amazonaws.com/prod/hexacode:problem-service-abc1234
+198306925854.dkr.ecr.us-west-2.amazonaws.com/prod/hexacode:problem-service-abc1234
 ```
 
 That means:
 
-- AWS account: `123456789012`
-- region: `ap-southeast-1`
+- AWS account: `198306925854` for the current production target; use your own account ID for other deployments
+- region: `us-west-2`
 - ECR repository: `prod/hexacode`
 - tag: `problem-service-abc1234`
-
-## Beginner Tips
-
-- Start with one image first, such as `identity-service`, before pushing all four.
-- If Docker says access denied, repeat the ECR login command.
-- All backend services in this repo now build from `./hexacode-backend`.
-- Use real tags like git SHA or release numbers. Avoid relying only on `latest`.
-- Push frontend separately as static files, not as a production Docker image for this repo.
 
 ## Common Errors
 
 ### `no basic auth credentials`
 
-Cause:
-
-- Docker is not logged into ECR anymore
-
-Fix:
+Docker is not logged into ECR anymore. Run the login command again:
 
 ```powershell
 aws ecr get-login-password --region $env:AWS_REGION |
@@ -428,59 +194,32 @@ aws ecr get-login-password --region $env:AWS_REGION |
 
 ### `RepositoryNotFoundException`
 
-Cause:
-
-- the ECR repository name is wrong, missing, or in another region
-
-Fix:
-
-- check that `prod/hexacode` exists in the selected region
-- run:
+The ECR repository name is wrong, missing, or in another region. Check the Terraform output and selected AWS region:
 
 ```powershell
+terraform -chdir=terraform output -raw ecr_repository_name
 aws ecr describe-repositories --region $env:AWS_REGION --repository-names $REPOSITORY
 ```
 
-### Docker build fails for `problem-service`
+### Docker build fails for a service
 
-Cause:
-
-- wrong Docker build context
-
-Fix:
-
-- use:
+Use the repo-specific build context. For `problem-service`, use the repo root so `data/problems` is available to the Dockerfile:
 
 ```powershell
-docker build -f ./hexacode-backend/services/problem-service/Dockerfile -t problem-service:$TAG ./hexacode-backend
+docker build -f hexacode-backend/services/problem-service/Dockerfile -t problem-service:$TAG .
 ```
 
 ### `UnrecognizedClientException` or AWS auth failure
 
-Cause:
-
-- AWS CLI credentials are missing, expired, or pointed at the wrong account
-
-Fix:
+AWS CLI credentials are missing, expired, or pointed at the wrong account:
 
 ```powershell
 aws sts get-caller-identity
+aws configure get region
 ```
 
-Then fix credentials before trying again.
+Fix credentials before trying again.
 
-## Recommended Next Step
+## Next Step
 
-After you confirm manual push works once, automate it in CI.
-
-Good next steps are:
-
-- GitHub Actions
-- AWS CodeBuild
-- a small PowerShell deploy script checked into the repo
-
-## Official AWS References
-
-- ECR push guide: https://docs.aws.amazon.com/AmazonECR/latest/userguide/docker-push-ecr-image.html
-- ECR with ECS: https://docs.aws.amazon.com/AmazonECR/latest/userguide/ECR_on_ECS.html
-- IAM permissions for pushing images: https://docs.aws.amazon.com/AmazonECR/latest/userguide/image-push-iam.html
+Use [aws-production-operator-guide.md](./aws-production-operator-guide.md) for the full production deployment flow after images are pushed.

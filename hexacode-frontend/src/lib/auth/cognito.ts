@@ -13,10 +13,15 @@ import type { PublicEnv } from "@/lib/env";
 
 type JwtClaimValue = string | number | boolean | string[] | null | undefined;
 
+const REFRESH_TOKEN_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
+const SESSION_REFRESH_WINDOW_MS = 5 * 60 * 1000;
+
 export type AuthSession = {
   accessToken: string;
   idToken: string;
   expiresAt: number;
+  refreshToken?: string;
+  refreshExpiresAt?: number;
   claims: Record<string, JwtClaimValue>;
 };
 
@@ -48,7 +53,11 @@ export function readStoredSession(): AuthSession | null {
   if (!raw) return null;
   try {
     const s = JSON.parse(raw) as AuthSession;
-    if (s.expiresAt <= Date.now()) {
+    if (s.refreshExpiresAt && s.refreshExpiresAt <= Date.now()) {
+      window.localStorage.removeItem(SESSION_STORAGE_KEY);
+      return null;
+    }
+    if (s.expiresAt <= Date.now() && !s.refreshToken) {
       window.localStorage.removeItem(SESSION_STORAGE_KEY);
       return null;
     }
@@ -58,7 +67,7 @@ export function readStoredSession(): AuthSession | null {
     return null;
   }
 }
-function writeStoredSession(s: AuthSession) {
+export function writeStoredSession(s: AuthSession) {
   window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(s));
 }
 export function clearStoredSession() {
@@ -75,16 +84,47 @@ export function isCognitoConfigured(env: PublicEnv) {
   return Boolean(env.cognitoClientId && env.cognitoRegion);
 }
 
-function buildSession(tokens: { AccessToken?: string; IdToken?: string; ExpiresIn?: number }) {
+function buildSession(
+  tokens: { AccessToken?: string; IdToken?: string; ExpiresIn?: number; RefreshToken?: string },
+  previous?: AuthSession | null,
+) {
   if (!tokens.AccessToken || !tokens.IdToken) {
     throw new Error("Cognito did not return the expected access and identity tokens.");
   }
+  const refreshToken = tokens.RefreshToken ?? previous?.refreshToken;
   return {
     accessToken: tokens.AccessToken,
     idToken: tokens.IdToken,
     expiresAt: Date.now() + (tokens.ExpiresIn ?? 3600) * 1000,
+    refreshToken,
+    refreshExpiresAt: refreshToken
+      ? (previous?.refreshExpiresAt ?? Date.now() + REFRESH_TOKEN_LIFETIME_MS)
+      : undefined,
     claims: decodeJwtPayload(tokens.IdToken),
   } satisfies AuthSession;
+}
+
+export function canRefreshSession(s: AuthSession | null) {
+  return Boolean(s?.refreshToken && (!s.refreshExpiresAt || s.refreshExpiresAt > Date.now()));
+}
+
+export function sessionNeedsRefresh(s: AuthSession | null) {
+  if (!s) return false;
+  return canRefreshSession(s) && s.expiresAt - Date.now() <= SESSION_REFRESH_WINDOW_MS;
+}
+
+export async function refreshStoredSession(env: PublicEnv, session = readStoredSession()) {
+  if (!session || !canRefreshSession(session)) return session;
+  const response = await createClient(env).send(
+    new InitiateAuthCommand({
+      ClientId: env.cognitoClientId,
+      AuthFlow: "REFRESH_TOKEN_AUTH",
+      AuthParameters: { REFRESH_TOKEN: session.refreshToken ?? "" },
+    }),
+  );
+  const nextSession = buildSession(response.AuthenticationResult ?? {}, session);
+  writeStoredSession(nextSession);
+  return nextSession;
 }
 
 function normalizeAttributeName(a: string) {

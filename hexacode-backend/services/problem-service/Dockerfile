@@ -2,11 +2,13 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-COPY services/problem-service/pyproject.toml ./pyproject.toml
-COPY services/problem-service/app ./app
-COPY backend_common ./backend_common
-COPY db ./db
-COPY scripts/import_problem_catalog.py ./scripts/import_problem_catalog.py
+COPY hexacode-backend/services/problem-service/pyproject.toml ./pyproject.toml
+COPY hexacode-backend/services/problem-service/app ./app
+COPY hexacode-backend/backend_common ./backend_common
+COPY hexacode-backend/db ./db
+COPY hexacode-backend/scripts/import_problem_catalog.py ./scripts/import_problem_catalog.py
+COPY hexacode-backend/scripts/promote_admin.py ./scripts/promote_admin.py
+COPY data/problems ./data/problems
 
 RUN pip install --no-cache-dir .
 

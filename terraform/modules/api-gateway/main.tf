@@ -59,7 +59,7 @@ resource "aws_apigatewayv2_stage" "default" {
   access_log_settings {
     destination_arn = aws_cloudwatch_log_group.api_access_logs.arn
     format = jsonencode({
-      requestId       = "$requestId"
+      requestId       = "$context.requestId"
       ip              = "$context.identity.sourceIp"
       requestTime     = "$context.requestTime"
       httpMethod      = "$context.httpMethod"
@@ -99,6 +99,7 @@ resource "aws_apigatewayv2_integration" "alb_integration" {
 
   integration_type       = "HTTP_PROXY"
   integration_uri        = var.internal_alb_listener_arn
+  integration_method     = "ANY"
   connection_type        = "VPC_LINK"
   connection_id          = aws_apigatewayv2_vpc_link.alb_vpclink.id
   payload_format_version = "1.0"
@@ -106,7 +107,7 @@ resource "aws_apigatewayv2_integration" "alb_integration" {
 
 # Chat Lambda Integration (always present, external ARN or local ARN via variable)
 resource "aws_apigatewayv2_integration" "chat_lambda" {
-  count = var.chat_lambda_arn != "" ? 1 : 0
+  count = var.chat_lambda_enabled ? 1 : 0
 
   api_id = aws_apigatewayv2_api.http_api.id
 
@@ -117,7 +118,7 @@ resource "aws_apigatewayv2_integration" "chat_lambda" {
 
 # Lambda invoke permission for chat lambda
 resource "aws_lambda_permission" "api_chat_lambda" {
-  count         = var.chat_lambda_arn != "" ? 1 : 0
+  count         = var.chat_lambda_enabled ? 1 : 0
   statement_id  = "AllowAPIGatewayInvokeChat"
   action        = "lambda:InvokeFunction"
   function_name = element(split(":", var.chat_lambda_arn), 6)
@@ -145,7 +146,7 @@ resource "aws_apigatewayv2_route" "api_any" {
 
 # Chat messages route — always present when chat_lambda_arn is set
 resource "aws_apigatewayv2_route" "chat_messages" {
-  count = var.chat_lambda_arn != "" ? 1 : 0
+  count = var.chat_lambda_enabled ? 1 : 0
 
   api_id = aws_apigatewayv2_api.http_api.id
 

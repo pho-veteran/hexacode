@@ -4,6 +4,7 @@ import { useAuth } from "@/lib/auth";
 import { Banner } from "@/components/ui/Feedback";
 
 const FIVE_MIN = 5 * 60 * 1000;
+const ONE_DAY = 24 * 60 * 60 * 1000;
 
 export function SessionExpiringBanner() {
   const auth = useAuth();
@@ -18,8 +19,10 @@ export function SessionExpiringBanner() {
 
   if (auth.status !== "authenticated" || !auth.session || dismissed) return null;
 
-  const remaining = auth.session.expiresAt - Date.now();
-  if (remaining > FIVE_MIN || remaining <= 0) return null;
+  const expiresAt = auth.session.refreshExpiresAt ?? auth.session.expiresAt;
+  const remaining = expiresAt - Date.now();
+  const canRefreshAccessToken = Boolean(auth.session.refreshToken && remaining > ONE_DAY);
+  if (canRefreshAccessToken || remaining > FIVE_MIN || remaining <= 0) return null;
   void tick;
 
   const minsLeft = Math.max(0, Math.ceil(remaining / 60_000));

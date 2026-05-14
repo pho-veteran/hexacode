@@ -72,6 +72,18 @@ resource "aws_security_group" "rds_proxy" {
   }
 }
 
+# sg_client_vpn - attached to AWS Client VPN network interfaces
+resource "aws_security_group" "client_vpn" {
+  count       = var.client_vpn_enabled ? 1 : 0
+  name        = "${local.name_prefix}-sg-client-vpn"
+  description = "Security group for AWS Client VPN"
+  vpc_id      = var.vpc_id
+
+  tags = {
+    Name = "${local.name_prefix}-sg-client-vpn"
+  }
+}
+
 # sg_redis - attached to ElastiCache Redis
 resource "aws_security_group" "redis" {
   name        = "${local.name_prefix}-sg-redis"
@@ -155,6 +167,17 @@ resource "aws_vpc_security_group_ingress_rule" "redis_from_api_services" {
   to_port                      = 6379
   ip_protocol                  = "tcp"
   description                  = "Redis from API services"
+}
+
+# sg_rds_proxy: PostgreSQL from Client VPN
+resource "aws_vpc_security_group_ingress_rule" "rds_proxy_from_client_vpn" {
+  count                        = var.client_vpn_enabled ? 1 : 0
+  security_group_id            = aws_security_group.rds_proxy.id
+  referenced_security_group_id = aws_security_group.client_vpn[0].id
+  from_port                    = 5432
+  to_port                      = 5432
+  ip_protocol                  = "tcp"
+  description                  = "PostgreSQL from Client VPN to RDS Proxy"
 }
 
 # ============================================================================
@@ -249,6 +272,17 @@ resource "aws_vpc_security_group_egress_rule" "worker_to_internet" {
   to_port           = 443
   ip_protocol       = "tcp"
   description       = "HTTPS to internet"
+}
+
+# sg_client_vpn: PostgreSQL to RDS Proxy
+resource "aws_vpc_security_group_egress_rule" "client_vpn_to_rds_proxy" {
+  count                        = var.client_vpn_enabled ? 1 : 0
+  security_group_id            = aws_security_group.client_vpn[0].id
+  referenced_security_group_id = aws_security_group.rds_proxy.id
+  from_port                    = 5432
+  to_port                      = 5432
+  ip_protocol                  = "tcp"
+  description                  = "PostgreSQL to RDS Proxy"
 }
 
 # sg_rds: Restricted egress to VPC CIDR

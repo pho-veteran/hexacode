@@ -133,3 +133,9 @@ variable "internal_alb_dns_name" {
   type        = string
   default     = ""
 }
+
+variable "internal_service_base_url" {
+  description = "Base URL for internal service-to-service HTTP calls through the internal ALB"
+  type        = string
+  default     = ""
+}

@@ -117,6 +117,33 @@ output "judge_dlq_arn" {
   value       = module.sqs.judge_dlq_arn
 }
 
+# ECR Outputs
+output "ecr_repository_name" {
+  description = "ECR repository name"
+  value       = module.ecr.repository_name
+}
+
+output "ecr_repository_url" {
+  description = "ECR repository URL"
+  value       = module.ecr.repository_url
+}
+
+output "ecr_repository_arn" {
+  description = "ECR repository ARN"
+  value       = module.ecr.repository_arn
+}
+
+# Client VPN Outputs
+output "client_vpn_endpoint_id" {
+  description = "Client VPN endpoint ID"
+  value       = module.client_vpn.endpoint_id
+}
+
+output "client_vpn_dns_name" {
+  description = "Client VPN DNS name"
+  value       = module.client_vpn.dns_name
+}
+
 # RDS Outputs
 output "db_endpoint" {
   description = "Connection endpoint for the RDS instance"
@@ -168,6 +195,16 @@ output "ecs_cluster_name" {
 output "ecs_cluster_arn" {
   description = "ARN of the ECS cluster"
   value       = module.ecs_cluster.cluster_arn
+}
+
+output "problem_task_definition_arn" {
+  description = "Problem service task definition ARN for one-off seed tasks"
+  value       = module.ecs_services.problem_task_definition_arn
+}
+
+output "identity_task_definition_arn" {
+  description = "Identity service task definition ARN for one-off admin tasks"
+  value       = module.ecs_services.identity_task_definition_arn
 }
 
 # IAM Outputs
@@ -252,6 +289,32 @@ output "cognito_jwks_url" {
 output "cors_lambda_arn" {
   description = "ARN of the CORS preflight Lambda function"
   value       = module.cors_lambda.cors_lambda_arn
+}
+
+# Bedrock Chat Outputs
+output "chat_lambda_arn" {
+  description = "ARN of the Bedrock-backed chat Lambda function"
+  value       = module.bedrock_chat.chat_lambda_arn
+}
+
+output "bedrock_agent_id" {
+  description = "ID of the Hexacode Bedrock agent"
+  value       = module.bedrock_chat.bedrock_agent_id
+}
+
+output "bedrock_agent_alias_id" {
+  description = "Alias ID for the live Hexacode Bedrock agent"
+  value       = module.bedrock_chat.bedrock_agent_alias_id
+}
+
+output "bedrock_knowledge_base_id" {
+  description = "ID of the Hexacode Bedrock knowledge base"
+  value       = module.bedrock_chat.bedrock_knowledge_base_id
+}
+
+output "bedrock_data_source_id" {
+  description = "ID of the S3 data source for the Hexacode Bedrock knowledge base"
+  value       = module.bedrock_chat.bedrock_data_source_id
 }
 
 # API Gateway Outputs

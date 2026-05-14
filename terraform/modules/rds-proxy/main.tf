@@ -15,9 +15,22 @@ resource "aws_iam_role" "proxy" {
   })
 }
 
-resource "aws_iam_role_policy_attachment" "proxy" {
-  role       = aws_iam_role.proxy.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonRDSProxyServiceRolePolicy"
+resource "aws_iam_role_policy" "proxy_secrets" {
+  name = "hexacode-${var.environment}-rds-proxy-secrets"
+  role = aws_iam_role.proxy.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue"
+        ]
+        Resource = var.db_master_user_secret_arn
+      }
+    ]
+  })
 }
 
 resource "aws_db_proxy" "main" {

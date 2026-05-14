@@ -14,7 +14,17 @@ terraform/*.tfstate.*
 terraform/crash.log
 terraform/terraform.tfvars
 terraform/modules/*/.terraform.lock.hcl
+terraform/tfplan*
+terraform/*.tfplan
+terraform/*.tfplan.json
+terraform/provider-schema.json
+terraform/*.zip
+terraform/modules/**/*.zip
+tfplan*.log
+tmp/
 
 .claude/
 # CocoIndex Code (ccc)
 /.cocoindex_code/
+
+/.superpower/

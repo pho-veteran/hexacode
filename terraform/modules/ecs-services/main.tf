@@ -16,7 +16,7 @@ locals {
   task_memory = {
     identity   = 512
     problem    = 2048
-    submission = 1536
+    submission = 1024
     worker     = 2048
   }
 }
@@ -42,7 +42,7 @@ resource "aws_ecs_task_definition" "identity_service" {
   container_definitions = jsonencode([
     {
       name      = "identity-service"
-      image     = "${var.ecr_repository_url}:identity-${var.image_tag}"
+      image     = "${var.ecr_repository_url}:identity-service-${var.image_tag}"
       cpu       = local.task_cpu.identity
       memory    = local.task_memory.identity
       essential = true
@@ -54,8 +54,20 @@ resource "aws_ecs_task_definition" "identity_service" {
       ]
       environment = [
         {
-          name  = "DATABASE_URL"
-          value = "postgresql://placeholder"
+          name  = "COGNITO_USER_POOL_ID"
+          value = var.cognito_user_pool_id
+        },
+        {
+          name  = "COGNITO_APP_CLIENT_ID"
+          value = var.cognito_app_client_id
+        },
+        {
+          name  = "COGNITO_ISSUER"
+          value = var.cognito_issuer
+        },
+        {
+          name  = "COGNITO_JWKS_URL"
+          value = var.cognito_jwks_url
         }
       ]
       secrets = var.application_secret_arn != "" ? [
@@ -79,9 +91,13 @@ resource "aws_ecs_task_definition" "identity_service" {
 resource "aws_ecs_service" "identity_service" {
   name            = "hexacode-${local.environment}-identity-service"
   cluster         = var.ecs_cluster_name
-  task_definition = aws_ecs_task_definition.identity_service.family
+  task_definition = aws_ecs_task_definition.identity_service.arn
   desired_count   = 2
   launch_type     = "FARGATE"
+
+  lifecycle {
+    ignore_changes = [desired_count]
+  }
 
   deployment_controller {
     type = "ECS"
@@ -135,7 +151,7 @@ resource "aws_ecs_task_definition" "problem_service" {
   container_definitions = jsonencode([
     {
       name      = "problem-service"
-      image     = "${var.ecr_repository_url}:problem-${var.image_tag}"
+      image     = "${var.ecr_repository_url}:problem-service-${var.image_tag}"
       cpu       = local.task_cpu.problem
       memory    = local.task_memory.problem
       essential = true
@@ -147,12 +163,24 @@ resource "aws_ecs_task_definition" "problem_service" {
       ]
       environment = [
         {
-          name  = "DATABASE_URL"
-          value = "postgresql://placeholder"
+          name  = "LOG_LEVEL"
+          value = "INFO"
         },
         {
-          name  = "REDIS_URL"
-          value = "redis://placeholder:6379"
+          name  = "AWS_REGION"
+          value = var.region
+        },
+        {
+          name  = "STORAGE_DRIVER"
+          value = "s3"
+        },
+        {
+          name  = "S3_REGION"
+          value = var.region
+        },
+        {
+          name  = "S3_FORCE_PATH_STYLE"
+          value = "false"
         },
         {
           name  = "S3_BUCKET_PROBLEMS"
@@ -165,6 +193,14 @@ resource "aws_ecs_task_definition" "problem_service" {
         {
           name  = "COGNITO_APP_CLIENT_ID"
           value = var.cognito_app_client_id
+        },
+        {
+          name  = "COGNITO_ISSUER"
+          value = var.cognito_issuer
+        },
+        {
+          name  = "COGNITO_JWKS_URL"
+          value = var.cognito_jwks_url
         }
       ]
       secrets = var.application_secret_arn != "" ? [
@@ -192,9 +228,13 @@ resource "aws_ecs_task_definition" "problem_service" {
 resource "aws_ecs_service" "problem_service" {
   name            = "hexacode-${local.environment}-problem-service"
   cluster         = var.ecs_cluster_name
-  task_definition = aws_ecs_task_definition.problem_service.family
+  task_definition = aws_ecs_task_definition.problem_service.arn
   desired_count   = 2
   launch_type     = "FARGATE"
+
+  lifecycle {
+    ignore_changes = [desired_count]
+  }
 
   deployment_controller {
     type = "ECS"
@@ -248,7 +288,7 @@ resource "aws_ecs_task_definition" "submission_service" {
   container_definitions = jsonencode([
     {
       name      = "submission-service"
-      image     = "${var.ecr_repository_url}:submission-${var.image_tag}"
+      image     = "${var.ecr_repository_url}:submission-service-${var.image_tag}"
       cpu       = local.task_cpu.submission
       memory    = local.task_memory.submission
       essential = true
@@ -260,20 +300,48 @@ resource "aws_ecs_task_definition" "submission_service" {
       ]
       environment = [
         {
-          name  = "DATABASE_URL"
-          value = "postgresql://placeholder"
+          name  = "LOG_LEVEL"
+          value = "INFO"
         },
         {
-          name  = "SQS_QUEUE_URL"
+          name  = "AWS_REGION"
+          value = var.region
+        },
+        {
+          name  = "STORAGE_DRIVER"
+          value = "s3"
+        },
+        {
+          name  = "QUEUE_DRIVER"
+          value = "sqs"
+        },
+        {
+          name  = "S3_REGION"
+          value = var.region
+        },
+        {
+          name  = "S3_FORCE_PATH_STYLE"
+          value = "false"
+        },
+        {
+          name  = "SQS_JUDGE_QUEUE_URL"
           value = var.judge_queue_url
         },
         {
-          name  = "INTERNAL_ALB_URL"
-          value = "http://${var.internal_alb_dns_name}"
+          name  = "PROBLEM_SERVICE_URL"
+          value = var.internal_service_base_url
         },
         {
           name  = "S3_BUCKET_SUBMISSIONS"
           value = var.submission_bucket_name
+        },
+        {
+          name  = "COGNITO_USER_POOL_ID"
+          value = var.cognito_user_pool_id
+        },
+        {
+          name  = "COGNITO_APP_CLIENT_ID"
+          value = var.cognito_app_client_id
         },
         {
           name  = "COGNITO_ISSUER"
@@ -305,9 +373,13 @@ resource "aws_ecs_task_definition" "submission_service" {
 resource "aws_ecs_service" "submission_service" {
   name            = "hexacode-${local.environment}-submission-service"
   cluster         = var.ecs_cluster_name
-  task_definition = aws_ecs_task_definition.submission_service.family
+  task_definition = aws_ecs_task_definition.submission_service.arn
   desired_count   = 2
   launch_type     = "FARGATE"
+
+  lifecycle {
+    ignore_changes = [desired_count]
+  }
 
   deployment_controller {
     type = "ECS"
@@ -367,12 +439,40 @@ resource "aws_ecs_task_definition" "worker" {
       essential = true
       environment = [
         {
-          name  = "SQS_QUEUE_URL"
+          name  = "LOG_LEVEL"
+          value = "INFO"
+        },
+        {
+          name  = "AWS_REGION"
+          value = var.region
+        },
+        {
+          name  = "STORAGE_DRIVER"
+          value = "s3"
+        },
+        {
+          name  = "QUEUE_DRIVER"
+          value = "sqs"
+        },
+        {
+          name  = "S3_REGION"
+          value = var.region
+        },
+        {
+          name  = "S3_FORCE_PATH_STYLE"
+          value = "false"
+        },
+        {
+          name  = "SQS_JUDGE_QUEUE_URL"
           value = var.judge_queue_url
         },
         {
-          name  = "INTERNAL_ALB_URL"
-          value = "http://${var.internal_alb_dns_name}"
+          name  = "PROBLEM_SERVICE_URL"
+          value = var.internal_service_base_url
+        },
+        {
+          name  = "SUBMISSION_SERVICE_URL"
+          value = var.internal_service_base_url
         },
         {
           name  = "WORKER_CONCURRENCY"
@@ -402,9 +502,13 @@ resource "aws_ecs_task_definition" "worker" {
 resource "aws_ecs_service" "worker" {
   name            = "hexacode-${local.environment}-worker"
   cluster         = var.ecs_cluster_name
-  task_definition = aws_ecs_task_definition.worker.family
+  task_definition = aws_ecs_task_definition.worker.arn
   desired_count   = 5
   launch_type     = "FARGATE"
+
+  lifecycle {
+    ignore_changes = [desired_count]
+  }
 
   deployment_controller {
     type = "ECS"

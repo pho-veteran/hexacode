@@ -32,3 +32,8 @@ output "sg_redis_id" {
   description = "Security group ID for ElastiCache Redis"
   value       = aws_security_group.redis.id
 }
+
+output "sg_client_vpn_id" {
+  description = "Security group ID for Client VPN"
+  value       = try(aws_security_group.client_vpn[0].id, null)
+}
