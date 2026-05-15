@@ -15,6 +15,11 @@ output "problem_bucket_name" {
   value       = aws_s3_bucket.problem_assets.bucket
 }
 
+output "problem_bucket_id" {
+  description = "ID/name of the problem assets S3 bucket"
+  value       = aws_s3_bucket.problem_assets.id
+}
+
 output "problem_bucket_arn" {
   description = "ARN of the problem assets S3 bucket"
   value       = aws_s3_bucket.problem_assets.arn

@@ -18,6 +18,11 @@ variable "knowledge_source_bucket_arn" {
   type        = string
 }
 
+variable "knowledge_source_bucket_id" {
+  description = "S3 bucket ID/name that stores problem/catalog documents for Bedrock ingestion"
+  type        = string
+}
+
 variable "knowledge_source_prefixes" {
   description = "S3 prefixes that Bedrock should ingest into the chat knowledge base"
   type        = list(string)

@@ -356,6 +356,94 @@ resource "aws_bedrockagent_data_source" "problem_assets" {
   }
 }
 
+data "archive_file" "kb_sync_lambda_zip" {
+  type        = "zip"
+  source_file = "${path.module}/kb_sync.py"
+  output_path = "${path.module}/kb_sync_lambda.zip"
+}
+
+resource "aws_iam_role" "kb_sync_lambda" {
+  name = "${local.name_prefix}-kb-sync-lambda"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "kb_sync_lambda_basic" {
+  role       = aws_iam_role.kb_sync_lambda.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+resource "aws_iam_role_policy" "kb_sync_lambda_bedrock" {
+  name = "${local.name_prefix}-kb-sync-lambda-bedrock"
+  role = aws_iam_role.kb_sync_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "bedrock:StartIngestionJob"
+        ]
+        Resource = aws_bedrockagent_knowledge_base.hexacode.arn
+      }
+    ]
+  })
+}
+
+resource "aws_lambda_function" "kb_sync" {
+  filename         = data.archive_file.kb_sync_lambda_zip.output_path
+  function_name    = "${local.name_prefix}-kb-sync"
+  role             = aws_iam_role.kb_sync_lambda.arn
+  handler          = "kb_sync.handler"
+  source_code_hash = data.archive_file.kb_sync_lambda_zip.output_base64sha256
+  runtime          = "python3.12"
+  timeout          = 30
+  memory_size      = 128
+
+  environment {
+    variables = {
+      KNOWLEDGE_BASE_ID = aws_bedrockagent_knowledge_base.hexacode.id
+      DATA_SOURCE_ID    = aws_bedrockagent_data_source.problem_assets.data_source_id
+    }
+  }
+
+  tags = {
+    Name = "${local.name_prefix}-kb-sync"
+  }
+}
+
+resource "aws_lambda_permission" "allow_problem_bucket_kb_sync" {
+  statement_id  = "AllowExecutionFromProblemBucket"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.kb_sync.function_name
+  principal     = "s3.amazonaws.com"
+  source_arn    = var.knowledge_source_bucket_arn
+}
+
+resource "aws_s3_bucket_notification" "problem_assets_kb_sync" {
+  bucket = var.knowledge_source_bucket_id
+
+  lambda_function {
+    lambda_function_arn = aws_lambda_function.kb_sync.arn
+    events              = ["s3:ObjectCreated:*", "s3:ObjectRemoved:*"]
+    filter_prefix       = var.knowledge_source_prefixes[0]
+  }
+
+  depends_on = [aws_lambda_permission.allow_problem_bucket_kb_sync]
+}
+
 resource "aws_bedrockagent_agent" "hexacode" {
   agent_name                  = "${local.name_prefix}-chat-agent"
   agent_resource_role_arn     = aws_iam_role.agent.arn

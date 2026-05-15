@@ -210,6 +210,7 @@ module "bedrock_chat" {
   region                      = var.region
   frontend_domain             = var.frontend_domain
   knowledge_source_bucket_arn = module.s3_buckets.problem_bucket_arn
+  knowledge_source_bucket_id  = module.s3_buckets.problem_bucket_id
 }
 
 module "waf" {
