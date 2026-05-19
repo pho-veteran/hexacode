@@ -802,4 +802,33 @@ create trigger trg_submission_outbox_events_touch_updated_at
 before update on submission.outbox_events
 for each row execute function public.touch_updated_at();
 
+-- Audit log
+CREATE TABLE IF NOT EXISTS app_identity.audit_log (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  actor_user_id uuid REFERENCES app_identity.users(id) ON DELETE SET NULL,
+  action text NOT NULL,
+  target_type text NOT NULL,
+  target_id text NOT NULL,
+  details jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_audit_log_target ON app_identity.audit_log(target_type, target_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_actor ON app_identity.audit_log(actor_user_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_created ON app_identity.audit_log(created_at DESC);
+
+-- Optimistic locking version on problems
+ALTER TABLE problem.problems ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
+
+-- Rejection reason on problems
+ALTER TABLE problem.problems ADD COLUMN IF NOT EXISTS rejection_reason text;
+
+-- Indexes for pagination and search performance
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX IF NOT EXISTS idx_users_username ON app_identity.users(username);
+CREATE INDEX IF NOT EXISTS idx_users_status ON app_identity.users(status_code);
+CREATE INDEX IF NOT EXISTS idx_problems_status ON problem.problems(status_code);
+CREATE INDEX IF NOT EXISTS idx_problems_created_by ON problem.problems(created_by_user_id);
+CREATE INDEX IF NOT EXISTS idx_problems_slug_lower ON problem.problems(lower(slug));
+CREATE INDEX IF NOT EXISTS idx_problems_title_trgm ON problem.problems USING gin(title gin_trgm_ops);
+
 commit;

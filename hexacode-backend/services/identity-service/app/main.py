@@ -4,7 +4,7 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from psycopg.rows import dict_row
 
 from backend_common.auth import AuthContext, require_authenticated_user
@@ -20,6 +20,7 @@ from backend_common.authz import (
     normalize_manageable_role_code,
     require_local_permission,
 )
+from backend_common.audit import record_audit_event
 from backend_common.bootstrap import bootstrap_service
 from backend_common.cors import install_cors
 from backend_common.database import get_connection
@@ -57,9 +58,33 @@ def build_current_actor_payload(actor: AuthContext, local_user: dict[str, Any]) 
     }
 
 
-def list_local_user_rows() -> list[dict[str, Any]]:
+def list_local_user_rows(
+    *,
+    limit: int = 25,
+    offset: int = 0,
+    search: str | None = None,
+    role: str | None = None,
+    status: str | None = None,
+) -> tuple[list[dict[str, Any]], int]:
+    search_pattern = f"%{search.strip()}%" if search and search.strip() else None
     with get_connection(SETTINGS.database_url) as connection:
         with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                """
+                select count(*)::int as total
+                from app_identity.users as users
+                where
+                  (%s::text is null or users.username ilike %s::text)
+                  and (%s::text is null or users.status_code = %s::text)
+                  and (%s::text is null or exists (
+                    select 1 from app_identity.user_role_assignments as a
+                    where a.user_id = users.id and a.role_code = %s::text
+                  ))
+                """,
+                (search_pattern, search_pattern, status, status, role, role),
+            )
+            total = cursor.fetchone()["total"]
+
             cursor.execute(
                 """
                 select
@@ -88,10 +113,19 @@ def list_local_user_rows() -> list[dict[str, Any]]:
                   from submission.submissions
                   where user_id = users.id
                 ) as submission_counts on true
+                where
+                  (%s::text is null or users.username ilike %s::text)
+                  and (%s::text is null or users.status_code = %s::text)
+                  and (%s::text is null or exists (
+                    select 1 from app_identity.user_role_assignments as a
+                    where a.user_id = users.id and a.role_code = %s::text
+                  ))
                 order by users.updated_at desc, users.created_at desc
-                """
+                limit %s offset %s
+                """,
+                (search_pattern, search_pattern, status, status, role, role, limit, offset),
             )
-            return [dict(row) for row in cursor.fetchall()]
+            return [dict(row) for row in cursor.fetchall()], total
 
 
 def get_local_user_row(user_id: str) -> dict[str, Any] | None:
@@ -157,6 +191,13 @@ def update_local_user_status(user_id: str, status_code: str, actor: AuthContext)
                 """,
                 (normalized_status, user_id),
             )
+            record_audit_event(
+                cursor,
+                actor_user_id=local_user["id"],
+                action="user.enable" if normalized_status == "active" else "user.disable",
+                target_type="user",
+                target_id=user_id,
+            )
         connection.commit()
 
     user_row = get_local_user_row(user_id)
@@ -195,6 +236,14 @@ def assign_local_user_role(user_id: str, role_code: str, actor: AuthContext) -> 
                 """,
                 (user_id, normalized_role, local_user["id"]),
             )
+            record_audit_event(
+                cursor,
+                actor_user_id=local_user["id"],
+                action="role.grant",
+                target_type="user",
+                target_id=user_id,
+                details={"role_code": normalized_role},
+            )
         connection.commit()
 
     user_row = get_local_user_row(user_id)
@@ -214,6 +263,9 @@ def revoke_local_user_role(user_id: str, role_code: str, actor: AuthContext) -> 
     if normalized_role == ROLE_ADMIN and not local_user_has_permission(local_user, PERM_ADMIN_FULL):
         raise HTTPException(status_code=403, detail="Admin permissions are required to revoke the admin role.")
 
+    if normalized_role == ROLE_ADMIN and user_id == local_user["id"]:
+        raise HTTPException(status_code=409, detail="Cannot revoke your own admin role.")
+
     with get_connection(SETTINGS.database_url) as connection:
         with connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
@@ -222,12 +274,29 @@ def revoke_local_user_role(user_id: str, role_code: str, actor: AuthContext) -> 
             )
             if cursor.fetchone() is None:
                 raise HTTPException(status_code=404, detail=f"User '{user_id}' was not found.")
+
+            if normalized_role == ROLE_ADMIN:
+                cursor.execute(
+                    "select count(*)::int as cnt from app_identity.user_role_assignments where role_code = 'admin'"
+                )
+                admin_count = cursor.fetchone()["cnt"]
+                if admin_count <= 1:
+                    raise HTTPException(status_code=409, detail="Cannot revoke the last admin role. At least one admin must remain.")
+
             cursor.execute(
                 """
                 delete from app_identity.user_role_assignments
                 where user_id = %s::uuid and role_code = %s
                 """,
                 (user_id, normalized_role),
+            )
+            record_audit_event(
+                cursor,
+                actor_user_id=local_user["id"],
+                action="role.revoke",
+                target_type="user",
+                target_id=user_id,
+                details={"role_code": normalized_role},
             )
         connection.commit()
 
@@ -287,6 +356,11 @@ async def get_current_actor(
 
 @app.get("/api/dashboard/users")
 async def list_dashboard_users(
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    search: str | None = None,
+    role: str | None = None,
+    status: str | None = None,
     actor: AuthContext = require_authenticated_user(SETTINGS),
 ) -> dict[str, Any]:
     local_user = ensure_local_actor(actor)
@@ -295,8 +369,8 @@ async def list_dashboard_users(
         PERM_USER_READ_DIRECTORY,
         detail="Moderator permissions are required for user moderation.",
     )
-    users = list_local_user_rows()
-    return {"data": users, "meta": {"source": SETTINGS.service_name, "count": len(users)}}
+    users, total = list_local_user_rows(limit=limit, offset=offset, search=search, role=role, status=status)
+    return {"data": users, "meta": {"source": SETTINGS.service_name, "count": len(users), "total": total, "limit": limit, "offset": offset}}
 
 
 @app.post("/api/dashboard/users/{user_id}/actions/{action}")
@@ -308,6 +382,9 @@ async def transition_dashboard_user(
     normalized_action = str(action or "").strip().lower()
     if normalized_action not in {"enable", "disable"}:
         raise HTTPException(status_code=400, detail="Unsupported user action.")
+    local_user = ensure_local_actor(actor)
+    if user_id == local_user["id"]:
+        raise HTTPException(status_code=409, detail="Cannot perform this action on your own account.")
     status_code = "active" if normalized_action == "enable" else "disabled"
     return {
         "data": update_local_user_status(user_id, status_code, actor),

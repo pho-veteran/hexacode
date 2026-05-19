@@ -57,11 +57,14 @@ Hexacode is an online coding judge platform with:
 - Cognito is the identity provider
 - local app authorization is role/capability based
 - identity-service is the app boundary for auth context and user-role management
+- audit log tracks role grants/revokes, user status changes, problem lifecycle transitions, and deletions (`app_identity.audit_log`)
+- last-admin protection prevents revoking the final admin role
+- self-action prevention blocks users from disabling themselves or revoking their own admin role
 
 ## Data Ownership
 
 - `app_identity`
-  - users, roles, permissions
+  - users, roles, permissions, audit_log
 - `problem`
   - problems, tags, testsets, testcases, checkers
 - `submission`
@@ -97,6 +100,16 @@ Import flow:
 - keep domain logic in services
 - keep worker execution isolated from HTTP request handling
 - keep local contracts aligned with future cloud deployment
+
+## API Conventions
+
+- All list endpoints support pagination: `limit` (default 25, max 100), `offset`, `search`, `sort`
+- Response envelope: `{ data: [...], meta: { source, count, total, limit, offset } }`
+- Problem updates use optimistic locking: client sends `version`, server rejects stale updates with 409
+- Problem lifecycle rejections include an optional `reason` field
+- UUID path parameters are validated before DB access (400 for malformed)
+- Input field limits enforced server-side: slug ≤128, title ≤256, statement ≤1MB, time ≤30s, memory ≤1GB
+- Testset archive extraction capped at 256MB decompressed / 10,000 files
 
 For the AWS production target, see `docs/aws.md` and `docs/aws-production-operator-guide.md`.
 

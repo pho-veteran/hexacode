@@ -57,6 +57,11 @@ resource "aws_apigatewayv2_stage" "default" {
 
   auto_deploy = true
 
+  default_route_settings {
+    throttling_burst_limit = var.default_throttle_burst_limit
+    throttling_rate_limit  = var.default_throttle_rate_limit
+  }
+
   dynamic "route_settings" {
     for_each = var.chat_lambda_enabled ? [1] : []
 

@@ -18,12 +18,14 @@ from psycopg.types.json import Json
 from starlette.datastructures import FormData, UploadFile
 
 from backend_common.auth import AuthContext, require_authenticated_user
+from backend_common.audit import record_audit_event
 from backend_common.authz import (
     PERM_ADMIN_FULL,
     PERM_OPS_MANAGE_STORAGE_ORPHANS,
     PERM_PROBLEM_ARCHIVE_ANY,
     PERM_PROBLEM_ARCHIVE_OWN,
     PERM_PROBLEM_CREATE,
+    PERM_PROBLEM_DELETE_OWN_DRAFT,
     PERM_PROBLEM_PUBLISH,
     PERM_PROBLEM_READ_OWN_DASHBOARD,
     PERM_PROBLEM_READ_REVIEW_QUEUE,
@@ -363,6 +365,53 @@ def coerce_positive_int(value: Any, *, field_name: str) -> int | None:
     return parsed
 
 
+def validate_uuid(value: str, *, field_name: str = "id") -> str:
+    try:
+        uuid.UUID(value)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail=f"{field_name} must be a valid UUID.")
+    return value
+
+
+def validate_problem_fields(payload: dict[str, Any]) -> None:
+    slug = payload.get("slug")
+    if slug and len(str(slug)) > 128:
+        raise HTTPException(status_code=400, detail="slug must not exceed 128 characters.")
+    title = payload.get("title")
+    if title and len(str(title)) > 256:
+        raise HTTPException(status_code=400, detail="title must not exceed 256 characters.")
+    summary_md = payload.get("summary_md")
+    if summary_md and len(str(summary_md)) > 10240:
+        raise HTTPException(status_code=400, detail="summary_md must not exceed 10240 characters.")
+    statement_md = payload.get("statement_md")
+    if statement_md and len(str(statement_md)) > 1048576:
+        raise HTTPException(status_code=400, detail="statement_md must not exceed 1048576 characters.")
+    statement_assets = payload.get("statement_assets")
+    if statement_assets and len(statement_assets) > 20:
+        raise HTTPException(status_code=400, detail="statement_assets must not exceed 20 files.")
+    time_limit_ms = payload.get("time_limit_ms")
+    if time_limit_ms is not None:
+        try:
+            if int(time_limit_ms) > 30000:
+                raise HTTPException(status_code=400, detail="time_limit_ms must not exceed 30000.")
+        except (ValueError, TypeError):
+            pass
+    memory_limit_kb = payload.get("memory_limit_kb")
+    if memory_limit_kb is not None:
+        try:
+            if int(memory_limit_kb) > 1048576:
+                raise HTTPException(status_code=400, detail="memory_limit_kb must not exceed 1048576.")
+        except (ValueError, TypeError):
+            pass
+    output_limit_kb = payload.get("output_limit_kb")
+    if output_limit_kb is not None:
+        try:
+            if int(output_limit_kb) > 262144:
+                raise HTTPException(status_code=400, detail="output_limit_kb must not exceed 262144.")
+        except (ValueError, TypeError):
+            pass
+
+
 def parse_bool_flag(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -472,6 +521,10 @@ def natural_sort_key(value: str) -> list[Any]:
     return [int(part) if part.isdigit() else part for part in parts]
 
 
+MAX_TESTCASE_ARCHIVE_DECOMPRESSED_BYTES = 256 * 1024 * 1024
+MAX_TESTCASE_FILE_COUNT = 10000
+
+
 def extract_testcases_from_archive(archive: UploadedBinary) -> list[ExtractedArchiveCase]:
     try:
         zip_file = zipfile.ZipFile(io.BytesIO(archive.data))
@@ -479,6 +532,8 @@ def extract_testcases_from_archive(archive: UploadedBinary) -> list[ExtractedArc
         raise HTTPException(status_code=400, detail="testset_archive must be a valid zip file.") from exc
 
     case_files: dict[str, dict[str, dict[str, Any]]] = {}
+    cumulative_size = 0
+    file_count = 0
     with zip_file:
         for member in zip_file.infolist():
             if member.is_dir():
@@ -493,8 +548,15 @@ def extract_testcases_from_archive(archive: UploadedBinary) -> list[ExtractedArc
             if parsed_path is None:
                 continue
 
+            file_count += 1
+            if file_count > MAX_TESTCASE_FILE_COUNT:
+                raise HTTPException(status_code=400, detail="Testset archive contains too many files (max 10000).")
+
             case_kind, case_key, suffix = parsed_path
             payload = zip_file.read(member)
+            cumulative_size += len(payload)
+            if cumulative_size > MAX_TESTCASE_ARCHIVE_DECOMPRESSED_BYTES:
+                raise HTTPException(status_code=400, detail="Testset archive exceeds maximum decompressed size (256MB).")
             if len(payload) > MAX_TESTCASE_BYTES:
                 raise HTTPException(
                     status_code=413,
@@ -1260,7 +1322,9 @@ def list_problem_rows(
     tag_slugs: list[str] | None = None,
     sort: str = "newest",
     public_only: bool = False,
-) -> list[dict[str, Any]]:
+    limit: int = 25,
+    offset: int = 0,
+) -> tuple[list[dict[str, Any]], int]:
     tag_filters = [tag_slug.strip().lower() for tag_slug in (tag_slugs or []) if tag_slug.strip()]
     search_pattern = f"%{search_query.strip()}%" if search_query and search_query.strip() else None
     sort_key = sort if sort in PROBLEM_LIST_SORT_CODES else "newest"
@@ -1279,39 +1343,27 @@ def list_problem_rows(
     else:
         order_by = "problems.updated_at desc, problems.created_at desc"
 
-    with get_connection(SETTINGS.database_url) as connection:
-        with connection.cursor(row_factory=dict_row) as cursor:
-            cursor.execute(
-                f"""
-                select
-                  problems.id::text as id,
-                  problems.slug,
-                  problems.title,
-                  problems.summary_md,
-                  problems.difficulty_code as difficulty,
-                  problems.visibility_code as visibility,
-                  problems.status_code as status,
-                  problems.created_at,
-                  coalesce(stats.submissions_count, 0) as submissions_count,
-                  coalesce(stats.accepted_count, 0) as accepted_count,
-                  coalesce(stats.unique_solvers_count, 0) as unique_solvers_count,
-                  coalesce(problem_tags.tags, '[]'::jsonb) as tags
-                from problem.problems as problems
-                left join problem.problem_stats as stats on stats.problem_id = problems.id
-                left join lateral (
-                  select jsonb_agg(
-                    jsonb_build_object(
-                      'slug', tags.slug,
-                      'name', tags.name,
-                      'description', tags.description,
-                      'color', tags.color
-                    )
-                    order by tags.name asc
-                  ) as tags
-                  from problem.problem_tags as problem_tags
-                  join problem.tags as tags on tags.id = problem_tags.tag_id
-                  where problem_tags.problem_id = problems.id
-                ) as problem_tags on true
+    base_params = (
+        search_pattern,
+        search_pattern,
+        search_pattern,
+        search_pattern,
+        public_only,
+        PUBLIC_PROBLEM_VISIBILITY_CODE,
+        PUBLIC_PROBLEM_STATUS_CODE,
+        difficulty,
+        difficulty,
+        public_only,
+        visibility,
+        visibility,
+        public_only,
+        status,
+        status,
+        tag_filters or None,
+        tag_filters or None,
+    )
+
+    where_clause = """
                   where
                     (%s::text is null or (
                       problems.slug ilike %s::text
@@ -1340,32 +1392,62 @@ def list_problem_rows(
                         and lower(selected_tags.slug) = any(%s::text[])
                     )
                   )
-                order by {order_by}
+    """
+
+    with get_connection(SETTINGS.database_url) as connection:
+        with connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                f"""
+                select count(*)::int as total
+                from problem.problems as problems
+                {where_clause}
                 """,
-                    (
-                        search_pattern,
-                        search_pattern,
-                        search_pattern,
-                        search_pattern,
-                        public_only,
-                        PUBLIC_PROBLEM_VISIBILITY_CODE,
-                        PUBLIC_PROBLEM_STATUS_CODE,
-                        difficulty,
-                        difficulty,
-                        public_only,
-                        visibility,
-                        visibility,
-                        public_only,
-                        status,
-                        status,
-                        tag_filters or None,
-                    tag_filters or None,
-                ),
+                base_params,
+            )
+            total = cursor.fetchone()["total"]
+
+            cursor.execute(
+                f"""
+                select
+                  problems.id::text as id,
+                  problems.slug,
+                  problems.title,
+                  problems.summary_md,
+                  problems.difficulty_code as difficulty,
+                  problems.visibility_code as visibility,
+                  problems.status_code as status,
+                  problems.created_at,
+                  problems.version,
+                  coalesce(stats.submissions_count, 0) as submissions_count,
+                  coalesce(stats.accepted_count, 0) as accepted_count,
+                  coalesce(stats.unique_solvers_count, 0) as unique_solvers_count,
+                  coalesce(problem_tags.tags, '[]'::jsonb) as tags
+                from problem.problems as problems
+                left join problem.problem_stats as stats on stats.problem_id = problems.id
+                left join lateral (
+                  select jsonb_agg(
+                    jsonb_build_object(
+                      'slug', tags.slug,
+                      'name', tags.name,
+                      'description', tags.description,
+                      'color', tags.color
+                    )
+                    order by tags.name asc
+                  ) as tags
+                  from problem.problem_tags as problem_tags
+                  join problem.tags as tags on tags.id = problem_tags.tag_id
+                  where problem_tags.problem_id = problems.id
+                ) as problem_tags on true
+                {where_clause}
+                order by {order_by}
+                limit %s offset %s
+                """,
+                (*base_params, limit, offset),
             )
             rows = list(cursor.fetchall())
             for row in rows:
                 row["tags"] = row.get("tags") or []
-            return rows
+            return rows, total
 
 
 def list_dashboard_problem_rows(
@@ -1373,7 +1455,12 @@ def list_dashboard_problem_rows(
     owner_user_id: str,
     *,
     scope: str = "mine",
-) -> list[dict[str, Any]]:
+    limit: int = 25,
+    offset: int = 0,
+    search: str | None = None,
+    status: str | None = None,
+    sort: str = "newest",
+) -> tuple[list[dict[str, Any]], int]:
     normalized_scope = normalize_dashboard_scope(scope)
     review_scope = normalized_scope == "review"
     if review_scope:
@@ -1389,10 +1476,36 @@ def list_dashboard_problem_rows(
             detail="Author permissions are required for problem authoring views.",
         )
 
+    search_pattern = f"%{search.strip()}%" if search and search.strip() else None
+    sort_options = {"newest": "problems.created_at desc", "oldest": "problems.created_at asc", "updated": "problems.updated_at desc", "title": "lower(problems.title) asc"}
+    order_by = sort_options.get(sort, "problems.created_at desc")
+
     with get_connection(SETTINGS.database_url) as connection:
         with connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
                 """
+                select count(*)::int as total
+                from problem.problems as problems
+                where
+                  (
+                    (%s::boolean = false and problems.created_by_user_id = %s::uuid)
+                    or
+                    (%s::boolean = true and problems.status_code = 'pending_review')
+                  )
+                  and (%s::text is null or (problems.title ilike %s::text or problems.slug ilike %s::text))
+                  and (%s::text is null or problems.status_code = %s::text)
+                """,
+                (
+                    review_scope, owner_user_id,
+                    review_scope,
+                    search_pattern, search_pattern, search_pattern,
+                    status, status,
+                ),
+            )
+            total = cursor.fetchone()["total"]
+
+            cursor.execute(
+                f"""
                 select
                   problems.id::text as id,
                   problems.slug,
@@ -1402,6 +1515,7 @@ def list_dashboard_problem_rows(
                   problems.status_code as status,
                   problems.created_at,
                   problems.updated_at,
+                  problems.version,
                   (problems.created_by_user_id = %s::uuid) as authored_by_me,
                   coalesce(testsets.active_testset_count, 0) as active_testset_count,
                   checker.checker_type_code as active_checker_type_code
@@ -1417,27 +1531,28 @@ def list_dashboard_problem_rows(
                   where problem_id = problems.id and is_active
                   order by created_at desc
                   limit 1
-                  ) as checker on true
-                  where
-                    (
-                      (%s::boolean = false and problems.created_by_user_id = %s::uuid)
-                      or
-                      (%s::boolean = true and problems.status_code = 'pending_review')
-                    )
-                  order by
-                    case when %s::boolean = true then problems.created_at end asc,
-                    problems.updated_at desc,
-                    problems.created_at desc
-                  """,
+                ) as checker on true
+                where
                   (
-                      owner_user_id,
-                      review_scope,
-                      owner_user_id,
-                      review_scope,
-                      review_scope,
-                  ),
+                    (%s::boolean = false and problems.created_by_user_id = %s::uuid)
+                    or
+                    (%s::boolean = true and problems.status_code = 'pending_review')
+                  )
+                  and (%s::text is null or (problems.title ilike %s::text or problems.slug ilike %s::text))
+                  and (%s::text is null or problems.status_code = %s::text)
+                order by {order_by}
+                limit %s offset %s
+                """,
+                (
+                    owner_user_id,
+                    review_scope, owner_user_id,
+                    review_scope,
+                    search_pattern, search_pattern, search_pattern,
+                    status, status,
+                    limit, offset,
+                ),
             )
-            return list(cursor.fetchall())
+            return list(cursor.fetchall()), total
 
 
 def get_problem_row(problem_slug: str, *, public_only: bool = False) -> dict[str, Any] | None:
@@ -1460,7 +1575,9 @@ def get_problem_row(problem_slug: str, *, public_only: bool = False) -> dict[str
                   status_code as status,
                     time_limit_ms,
                     memory_limit_kb,
-                    output_limit_kb
+                    output_limit_kb,
+                    version,
+                    rejection_reason
                   from problem.problems
                   where
                     lower(slug) = lower(%s)
@@ -1663,6 +1780,8 @@ def get_problem_row(problem_slug: str, *, public_only: bool = False) -> dict[str
         "time_limit_ms": problem_row["time_limit_ms"],
         "memory_limit_kb": problem_row["memory_limit_kb"],
         "output_limit_kb": problem_row["output_limit_kb"],
+        "version": problem_row["version"],
+        "rejection_reason": problem_row["rejection_reason"],
         "tags": tags,
         "statement_assets": statement_assets,
         "testsets": testsets,
@@ -1945,7 +2064,7 @@ def get_dashboard_problem_row(problem_id: str, owner_user_id: str) -> dict[str, 
     }
 
 
-def transition_problem_lifecycle(problem_id: str, action: str, actor: AuthContext) -> dict[str, Any]:
+def transition_problem_lifecycle(problem_id: str, action: str, actor: AuthContext, *, reason: str | None = None) -> dict[str, Any]:
     local_user = ensure_local_actor(actor)
     normalized_action = str(action).strip().lower()
     if normalized_action not in {"request-review", "approve", "reject", "publish", "unpublish", "archive"}:
@@ -1998,6 +2117,7 @@ def transition_problem_lifecycle(problem_id: str, action: str, actor: AuthContex
                     set
                       visibility_code = 'private',
                       status_code = 'pending_review',
+                      rejection_reason = null,
                       updated_by_user_id = %s::uuid,
                       updated_at = now(),
                       reviewed_by_user_id = null,
@@ -2040,6 +2160,7 @@ def transition_problem_lifecycle(problem_id: str, action: str, actor: AuthContex
                     set
                       visibility_code = 'private',
                       status_code = 'rejected',
+                      rejection_reason = %s,
                       updated_by_user_id = %s::uuid,
                       updated_at = now(),
                       reviewed_by_user_id = %s::uuid,
@@ -2047,7 +2168,7 @@ def transition_problem_lifecycle(problem_id: str, action: str, actor: AuthContex
                     where id = %s::uuid
                     returning id::text as id, slug, title, visibility_code as visibility, status_code as status
                     """,
-                    (local_user["id"], local_user["id"], problem_id),
+                    (reason, local_user["id"], local_user["id"], problem_id),
                 )
                 updated_row = cursor.fetchone()
             elif normalized_action == "publish":
@@ -2117,6 +2238,15 @@ def transition_problem_lifecycle(problem_id: str, action: str, actor: AuthContex
                     (local_user["id"], problem_id),
                 )
                 updated_row = cursor.fetchone()
+
+            record_audit_event(
+                cursor,
+                actor_user_id=local_user["id"],
+                action=f"problem.lifecycle.{normalized_action}",
+                target_type="problem",
+                target_id=problem_id,
+                details={"from_status": current_status, "action": normalized_action},
+            )
 
         connection.commit()
 
@@ -2948,6 +3078,14 @@ def delete_problem_row(problem_id: str, actor: AuthContext) -> dict[str, Any]:
                 cursor,
                 [row["object_id"] for row in candidate_rows],
             )
+            record_audit_event(
+                cursor,
+                actor_user_id=local_user["id"],
+                action="problem.delete",
+                target_type="problem",
+                target_id=problem_id,
+                details={"slug": problem_row["slug"]},
+            )
         connection.commit()
 
     cleanup_storage_object_rows(deleted_object_rows)
@@ -3071,6 +3209,7 @@ def create_problem_row(payload: dict[str, Any], actor: AuthContext) -> dict[str,
         PERM_PROBLEM_CREATE,
         detail="Author permissions are required to create problems.",
     )
+    validate_problem_fields(payload)
     slug = str(payload.get("slug", "")).strip().lower()
     title = str(payload.get("title", "")).strip()
     summary_md = normalize_optional_text(payload.get("summary_md"))
@@ -3189,9 +3328,6 @@ def create_problem_row(payload: dict[str, Any], actor: AuthContext) -> dict[str,
         checker_runtime_profile_key = None
         checker_entrypoint = None
         checker_source = None
-
-    if problem_slug_exists(slug):
-        raise HTTPException(status_code=409, detail=f"Problem slug '{slug}' already exists.")
 
     bucket_name = SETTINGS.storage.problems_bucket
     if not bucket_name:
@@ -3642,6 +3778,9 @@ def update_problem_row(problem_id: str, payload: dict[str, Any], actor: AuthCont
         PERM_PROBLEM_UPDATE_OWN_DRAFT,
         detail="Author permissions are required to update problems.",
     )
+    validate_problem_fields(payload)
+    if payload.get("version") is None:
+        raise HTTPException(status_code=400, detail="version is required for updates.")
     slug = str(payload.get("slug", "")).strip().lower()
     title = str(payload.get("title", "")).strip()
     summary_md = normalize_optional_text(payload.get("summary_md"))
@@ -3866,6 +4005,7 @@ def update_problem_row(problem_id: str, payload: dict[str, Any], actor: AuthCont
                       output_limit_kb = %s,
                       updated_by_user_id = %s::uuid,
                       updated_at = now(),
+                      version = version + 1,
                       published_by_user_id = case
                         when %s = 'published' then coalesce(published_by_user_id, %s::uuid)
                         when %s = 'archived' then published_by_user_id
@@ -3876,8 +4016,8 @@ def update_problem_row(problem_id: str, payload: dict[str, Any], actor: AuthCont
                         when %s = 'archived' then published_at
                         else null
                       end
-                    where id = %s::uuid
-                    returning id::text as id, slug, title, status_code as status
+                    where id = %s::uuid and version = %s
+                    returning id::text as id, slug, title, status_code as status, version
                     """,
                     (
                         slug,
@@ -3901,9 +4041,12 @@ def update_problem_row(problem_id: str, payload: dict[str, Any], actor: AuthCont
                         status_code,
                         status_code,
                         problem_id,
+                        payload.get("version"),
                     ),
                 )
                 updated_problem = cursor.fetchone()
+                if updated_problem is None:
+                    raise HTTPException(status_code=409, detail="Problem was modified by another user. Please refresh and try again.")
 
                 cursor.execute(
                     "delete from problem.problem_tags where problem_id = %s::uuid",
@@ -4343,6 +4486,8 @@ async def list_problems(
     status: str | None = None,
     tag: list[str] = Query(default=[]),
     sort: str = "newest",
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
     normalized_difficulty = normalize_optional_text(difficulty)
     if normalized_difficulty == "all":
@@ -4394,13 +4539,15 @@ async def list_problems(
             "status": normalized_status,
             "tags": normalized_tags,
             "sort": normalized_sort,
+            "limit": limit,
+            "offset": offset,
         }
     )
     cached_response = read_json_cache(SETTINGS.redis.url, cache_key)
     if isinstance(cached_response, dict):
         return cached_response
 
-    problems = list_problem_rows(
+    problems, total = list_problem_rows(
         search_query=normalized_query,
         difficulty=normalized_difficulty,
         visibility=normalized_visibility,
@@ -4408,12 +4555,17 @@ async def list_problems(
         tag_slugs=normalized_tags,
         sort=normalized_sort,
         public_only=True,
+        limit=limit,
+        offset=offset,
     )
     response = {
         "data": problems,
         "meta": {
             "source": SETTINGS.service_name,
             "count": len(problems),
+            "total": total,
+            "limit": limit,
+            "offset": offset,
             "filters": {
                 "q": normalized_query,
                 "difficulty": normalized_difficulty,
@@ -4431,13 +4583,21 @@ async def list_problems(
 @app.get("/api/dashboard/problems")
 async def list_dashboard_problems(
     scope: str = "mine",
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    search: str | None = None,
+    status: str | None = None,
+    sort: str = "newest",
     actor: AuthContext = require_authenticated_user(SETTINGS),
 ) -> dict[str, Any]:
     local_user = ensure_local_actor(actor)
-    problems = list_dashboard_problem_rows(local_user, local_user["id"], scope=scope)
+    problems, total = list_dashboard_problem_rows(
+        local_user, local_user["id"], scope=scope,
+        limit=limit, offset=offset, search=search, status=status, sort=sort,
+    )
     return {
         "data": problems,
-        "meta": {"source": SETTINGS.service_name, "count": len(problems), "scope": scope},
+        "meta": {"source": SETTINGS.service_name, "count": len(problems), "total": total, "limit": limit, "offset": offset, "scope": scope},
     }
 
 
@@ -4446,6 +4606,7 @@ async def get_dashboard_problem(
     problem_id: str,
     actor: AuthContext = require_authenticated_user(SETTINGS),
 ) -> dict[str, Any]:
+    validate_uuid(problem_id, field_name="problem_id")
     local_user = ensure_local_actor(actor)
     problem = get_dashboard_problem_row(problem_id, local_user["id"])
     if problem is None:
@@ -4620,6 +4781,7 @@ async def update_problem(
     request: Request,
     actor: AuthContext = require_authenticated_user(SETTINGS),
 ) -> dict[str, Any]:
+    validate_uuid(problem_id, field_name="problem_id")
     updated_problem = update_problem_row(problem_id, await read_problem_request_payload(request), actor)
     return {
         "data": updated_problem,
@@ -4632,6 +4794,7 @@ async def delete_dashboard_problem(
     problem_id: str,
     actor: AuthContext = require_authenticated_user(SETTINGS),
 ) -> dict[str, Any]:
+    validate_uuid(problem_id, field_name="problem_id")
     return {
         "data": delete_problem_row(problem_id, actor),
         "meta": {"source": SETTINGS.service_name},
@@ -4642,9 +4805,20 @@ async def delete_dashboard_problem(
 async def transition_dashboard_problem(
     problem_id: str,
     action: str,
+    request: Request,
     actor: AuthContext = require_authenticated_user(SETTINGS),
 ) -> dict[str, Any]:
-    updated_problem = transition_problem_lifecycle(problem_id, action, actor)
+    validate_uuid(problem_id, field_name="problem_id")
+    reason: str | None = None
+    content_type = request.headers.get("content-type", "").lower()
+    if content_type.startswith("application/json"):
+        try:
+            body = await request.json()
+            if isinstance(body, dict):
+                reason = normalize_optional_text(body.get("reason"))
+        except Exception:
+            pass
+    updated_problem = transition_problem_lifecycle(problem_id, action, actor, reason=reason)
     return {
         "data": updated_problem,
         "meta": {"source": SETTINGS.service_name},

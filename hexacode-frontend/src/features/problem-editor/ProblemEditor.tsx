@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, unstable_usePrompt, useBeforeUnload } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Upload, X } from "lucide-react";
+import { Upload, X, CheckCircle2, Circle } from "lucide-react";
 import { toast } from "sonner";
+import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import Editor from "@monaco-editor/react";
+import { MarkdownPreview } from "@/components/ui/MarkdownPreview";
 import {
   getRuntimes,
   getTags,
@@ -66,7 +69,7 @@ export type ProblemEditorInitialData = {
   activeChecker?: ProblemChecker | null;
 };
 
-export type ProblemSubmitIntent = "manual" | "save_draft" | "request_review";
+export type ProblemSubmitIntent = "save_draft" | "request_review" | "save_changes";
 
 type Props = {
   mode: "create" | "edit";
@@ -129,14 +132,6 @@ function isPositiveInt(v: string) {
   return Number.isInteger(n) && n > 0;
 }
 
-function parseTags(v: string) {
-  return v
-    .split(",")
-    .map((p) => p.trim().toLowerCase())
-    .filter(Boolean)
-    .filter((e, i, a) => a.indexOf(e) === i);
-}
-
 function draftKey(mode: "create" | "edit", init: ProblemEditorInitialData) {
   return `hexacode.problem-editor:${mode}:${init.id ?? "new"}`;
 }
@@ -149,14 +144,11 @@ type Draft = {
   statementMd: string;
   replaceStatementAssets: boolean;
   difficultyCode: string;
-  typeCode: string;
-  visibilityCode: string;
   scoringCode: string;
-  statusCode: string;
   timeLimitMs: string;
   memoryLimitKb: string;
   outputLimitKb: string;
-  tagInput: string;
+  selectedTags: string[];
   testsetTypeCode: string;
   testsetTitle: string;
   testsetNote: string;
@@ -175,14 +167,11 @@ function draftFromInitial(init: ProblemEditorInitialData): Draft {
     statementMd: init.statementMd || DEFAULT_STATEMENT,
     replaceStatementAssets: false,
     difficultyCode: init.difficultyCode,
-    typeCode: init.typeCode,
-    visibilityCode: init.visibilityCode,
     scoringCode: init.scoringCode,
-    statusCode: init.statusCode,
     timeLimitMs: init.timeLimitMs,
     memoryLimitKb: init.memoryLimitKb,
     outputLimitKb: init.outputLimitKb,
-    tagInput: init.tagSlugs.join(", "),
+    selectedTags: [...init.tagSlugs],
     testsetTypeCode: init.testsets[0]?.testset_type_code ?? "primary",
     testsetTitle: init.testsets[0]?.title ?? "Primary testset",
     testsetNote: init.testsets[0]?.note ?? "",
@@ -192,6 +181,41 @@ function draftFromInitial(init: ProblemEditorInitialData): Draft {
     checkerNote: init.activeChecker?.note ?? "",
   };
 }
+
+function validateField(field: string, value: string): string | null {
+  switch (field) {
+    case "slug":
+      if (!value.trim()) return "Slug is required.";
+      if (value.length > 128) return "Slug must be ≤128 characters.";
+      if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value)) return "Only lowercase letters, numbers, and hyphens.";
+      return null;
+    case "title":
+      if (!value.trim()) return "Title is required.";
+      if (value.length > 256) return "Title must be ≤256 characters.";
+      return null;
+    case "timeLimitMs": {
+      const n = Number(value);
+      if (!value.trim() || !Number.isInteger(n) || n <= 0) return "Must be a positive integer.";
+      if (n > 30000) return "Max 30000 ms.";
+      return null;
+    }
+    case "memoryLimitKb": {
+      const n = Number(value);
+      if (!value.trim() || !Number.isInteger(n) || n <= 0) return "Must be a positive integer.";
+      if (n > 1048576) return "Max 1048576 KB.";
+      return null;
+    }
+    case "outputLimitKb": {
+      const n = Number(value);
+      if (!value.trim() || !Number.isInteger(n) || n <= 0) return "Must be a positive integer.";
+      if (n > 262144) return "Max 262144 KB.";
+      return null;
+    }
+    default:
+      return null;
+  }
+}
+
 
 export function ProblemEditor({
   mode,
@@ -208,13 +232,16 @@ export function ProblemEditor({
   const [draft, setDraft] = useState<Draft>(initial);
   const [statementFile, setStatementFile] = useState<File | null>(null);
   const [statementAssets, setStatementAssets] = useState<File[]>([]);
-  const [testsetArchive, setTestsetArchive] = useState<File | null>(null);
   const [checkerSource, setCheckerSource] = useState<File | null>(null);
   const [intent, setIntent] = useState<ProblemSubmitIntent | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [progress, setProgress] = useState<UploadProgress | null>(null);
   const [autosavedAt, setAutosavedAt] = useState<string | null>(null);
   const [recovered, setRecovered] = useState<{ draft: Draft; savedAt: string } | null>(null);
+  const [editorMode, setEditorMode] = useState<"edit" | "preview" | "split">("split");
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [checkerExpanded, setCheckerExpanded] = useState(initial.checkerTypeCode === "custom");
+  const [tagFilter, setTagFilter] = useState("");
 
   const tagsQ = useQuery({ queryKey: ["tags"], queryFn: getTags });
   const runtimesQ = useQuery({ queryKey: ["runtimes"], queryFn: getRuntimes });
@@ -226,13 +253,19 @@ export function ProblemEditor({
     initialData.activeChecker?.checker_type_code === "custom" &&
     !!initialData.activeChecker?.source_object;
 
-  const selectedTags = useMemo(() => parseTags(draft.tagInput), [draft.tagInput]);
-
   const baseStr = JSON.stringify(initial);
   const curStr = JSON.stringify(draft);
-  const hasFiles = !!(statementFile || statementAssets.length || testsetArchive || checkerSource);
+  const hasFiles = !!(statementFile || statementAssets.length || checkerSource);
   const dirty = curStr !== baseStr || hasFiles;
   const busy = intent !== null;
+
+  // Completeness checks
+  const basicInfoReady = !!draft.slug.trim() && !!draft.title.trim();
+  const statementReady =
+    (draft.statementMd !== DEFAULT_STATEMENT && draft.statementMd.length > 50) || !!statementFile;
+  const testsetReady = initialData.testsets.length > 0;
+  const checkerReady = !!draft.checkerTypeCode;
+  const canSubmitForReview = basicInfoReady && statementReady;
 
   useEffect(() => {
     try {
@@ -244,7 +277,7 @@ export function ProblemEditor({
           setRecovered({ draft: parsed.draft, savedAt: parsed.savedAt });
         }
       }
-    } catch {}
+    } catch { /* ignore */ }
   }, [storageKey, baseStr]);
 
   useEffect(() => {
@@ -254,10 +287,7 @@ export function ProblemEditor({
     }
     const t = window.setTimeout(() => {
       const savedAt = new Date().toISOString();
-      localStorage.setItem(
-        storageKey,
-        JSON.stringify({ draft, savedAt, version: DRAFT_VERSION }),
-      );
+      localStorage.setItem(storageKey, JSON.stringify({ draft, savedAt, version: DRAFT_VERSION }));
       setAutosavedAt(savedAt);
     }, 800);
     return () => window.clearTimeout(t);
@@ -273,7 +303,16 @@ export function ProblemEditor({
     e.returnValue = "";
   });
 
-  const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setDraft((d) => ({ ...d, [k]: v }));
+  const set = <K extends keyof Draft>(k: K, v: Draft[K]) => {
+    setDraft((d) => ({ ...d, [k]: v }));
+    if (errors[k]) setErrors((prev) => { const n = { ...prev }; delete n[k]; return n; });
+  };
+
+  const handleBlur = (field: string, value: string) => {
+    const e = validateField(field, value);
+    if (e) setErrors((prev) => ({ ...prev, [field]: e }));
+    else setErrors((prev) => { const n = { ...prev }; delete n[field]; return n; });
+  };
 
   function validate(): string | null {
     const s = draft.slug.trim().toLowerCase();
@@ -295,33 +334,22 @@ export function ProblemEditor({
 
   async function handleSubmit(submitIntent: ProblemSubmitIntent) {
     setErr(null);
-    if (!accessToken) {
-      setErr("Sign in before saving.");
-      return;
-    }
+    if (!accessToken) { setErr("Sign in before saving."); return; }
     const v = validate();
-    if (v) {
-      setErr(v);
-      return;
-    }
+    if (v) { setErr(v); return; }
 
-    let resolvedStatus = draft.statusCode;
-    let resolvedVisibility = draft.visibilityCode;
+    let resolvedStatus: string;
+    let resolvedVisibility: string;
     if (submitIntent === "save_draft") {
       resolvedStatus = "draft";
       resolvedVisibility = "private";
     } else if (submitIntent === "request_review") {
       resolvedStatus = "pending_review";
       resolvedVisibility = "private";
+    } else {
+      resolvedStatus = initialData.statusCode;
+      resolvedVisibility = initialData.visibilityCode;
     }
-
-    if (
-      mode === "edit" &&
-      testsetArchive &&
-      initialData.testsets.length &&
-      !window.confirm("Uploading a new testset archive replaces the current active testsets. Continue?")
-    )
-      return;
 
     const s = draft.slug.trim().toLowerCase();
     const fd = new FormData();
@@ -329,7 +357,7 @@ export function ProblemEditor({
     fd.append("title", draft.title.trim());
     fd.append("summary_md", draft.summaryMd);
     fd.append("difficulty_code", draft.difficultyCode);
-    fd.append("type_code", draft.typeCode);
+    fd.append("type_code", "traditional");
     fd.append("visibility_code", resolvedVisibility);
     fd.append("scoring_code", draft.scoringCode);
     fd.append("status_code", resolvedStatus);
@@ -344,14 +372,8 @@ export function ProblemEditor({
     if (mode === "edit" && draft.replaceStatementAssets) {
       fd.append("replace_statement_assets", "true");
     }
-    selectedTags.forEach((t) => fd.append("tag_slugs", t));
+    draft.selectedTags.forEach((t) => fd.append("tag_slugs", t));
     statementAssets.forEach((f) => fd.append("statement_assets", f));
-    if (testsetArchive) {
-      fd.append("testset_type_code", draft.testsetTypeCode);
-      fd.append("testset_title", draft.testsetTitle.trim());
-      fd.append("testset_note", draft.testsetNote);
-      fd.append("testset_archive", testsetArchive);
-    }
     fd.append("checker_type_code", draft.checkerTypeCode);
     fd.append("checker_note", draft.checkerNote);
     if (draft.checkerTypeCode === "custom") {
@@ -363,9 +385,7 @@ export function ProblemEditor({
     try {
       setIntent(submitIntent);
       setProgress(null);
-      await onSubmit(fd, s, submitIntent, {
-        onUploadProgress: (p) => setProgress(p),
-      });
+      await onSubmit(fd, s, submitIntent, { onUploadProgress: (p) => setProgress(p) });
       localStorage.removeItem(storageKey);
       setAutosavedAt(null);
       toast.success(mode === "create" ? "Problem created" : "Problem saved");
@@ -379,519 +399,495 @@ export function ProblemEditor({
   const runtimes = runtimesQ.data ?? [];
   const tags = tagsQ.data ?? [];
 
+  const draftButtonLabel = mode === "edit" && initialData.statusCode !== "draft" && initialData.statusCode !== "rejected"
+    ? "Save changes" : "Save draft";
+  const draftIntent: ProblemSubmitIntent = mode === "edit" && initialData.statusCode !== "draft" && initialData.statusCode !== "rejected"
+    ? "save_changes" : "save_draft";
+
+
   return (
-    <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_320px] gap-6">
-      <form
-        className="space-y-5"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void handleSubmit("manual");
-        }}
-      >
-        {recovered ? (
-          <Banner tone="warn" title="Autosaved draft found">
-            <p className="text-[12.5px]">
-              A local draft from {new Date(recovered.savedAt).toLocaleString()} is available. Restoring overwrites the loaded values. Selected files are not preserved.
-            </p>
-            <div className="mt-2 flex gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setDraft(recovered.draft);
-                  setRecovered(null);
-                }}
-                className="rounded-full hairline bg-[var(--color-bg-elevated)] px-3 py-1 text-[12px] hover:bg-[var(--color-bg-muted)]"
-              >
+    <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-6">
+      {/* Main column */}
+      <div className="space-y-5">
+        {/* Recovery banner */}
+        {recovered && (
+          <Banner tone="info">
+            <span className="text-[13px]">
+              Recovered draft from {new Date(recovered.savedAt).toLocaleString()}.{" "}
+              <button className="underline" onClick={() => { setDraft(recovered.draft); setRecovered(null); }}>
                 Restore
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  localStorage.removeItem(storageKey);
-                  setRecovered(null);
-                }}
-                className="rounded-full hairline bg-[var(--color-bg-elevated)] px-3 py-1 text-[12px] hover:bg-[var(--color-bg-muted)]"
-              >
+              </button>{" "}
+              or{" "}
+              <button className="underline" onClick={() => { setRecovered(null); localStorage.removeItem(storageKey); }}>
                 Discard
               </button>
-            </div>
+            </span>
           </Banner>
-        ) : null}
+        )}
 
+        {/* Error banner */}
+        {err && <Banner tone="err">{err}</Banner>}
+
+        {/* Basic info */}
         <Card>
-          <SectionHead eyebrow="Metadata" title="Basic info" />
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <Field label="Slug">
+          <h3 className="text-[14px] font-semibold mb-4">Basic info</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Field label="Slug" id="slug" error={errors.slug}>
               <Input
+                id="slug"
                 value={draft.slug}
-                onChange={(e) => set("slug", e.target.value)}
-                onBlur={(e) => set("slug", slugify(e.target.value))}
-                placeholder="two-pointers-lab"
-                required
+                onChange={(e) => set("slug", slugify(e.target.value))}
+                onBlur={() => handleBlur("slug", draft.slug)}
+                placeholder="my-problem"
+                className={errors.slug ? "border-[var(--color-err-fg)]" : ""}
               />
             </Field>
-            <Field label="Title">
+            <Field label="Title" id="title" error={errors.title}>
               <Input
+                id="title"
                 value={draft.title}
-                onChange={(e) => {
-                  set("title", e.target.value);
-                  if (!draft.slug) set("slug", slugify(e.target.value));
-                }}
-                required
+                onChange={(e) => set("title", e.target.value)}
+                onBlur={() => handleBlur("title", draft.title)}
+                placeholder="Problem title"
+                className={errors.title ? "border-[var(--color-err-fg)]" : ""}
               />
             </Field>
           </div>
-          <Field label="Summary" hint="Shown on problem cards.">
-            <Textarea value={draft.summaryMd} onChange={(e) => set("summaryMd", e.target.value)} rows={3} />
-          </Field>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-            <Field label="Difficulty">
-              <Select value={draft.difficultyCode} onChange={(e) => set("difficultyCode", e.target.value)}>
-                <option value="easy">easy</option>
-                <option value="medium">medium</option>
-                <option value="hard">hard</option>
+          <div className="mt-4">
+            <Field label="Summary" id="summary">
+              <Textarea
+                id="summary"
+                value={draft.summaryMd}
+                onChange={(e) => set("summaryMd", e.target.value)}
+                placeholder="Short summary (optional)"
+                rows={2}
+              />
+            </Field>
+          </div>
+        </Card>
+
+        {/* Metadata grid — only Difficulty and Scoring */}
+        <Card>
+          <h3 className="text-[14px] font-semibold mb-4">Metadata</h3>
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="Difficulty" id="difficulty">
+              <Select id="difficulty" value={draft.difficultyCode} onChange={(e) => set("difficultyCode", e.target.value)}>
+                <option value="easy">Easy</option>
+                <option value="medium">Medium</option>
+                <option value="hard">Hard</option>
               </Select>
             </Field>
-            <Field label="Type">
-              <Select value={draft.typeCode} onChange={(e) => set("typeCode", e.target.value)}>
-                <option value="traditional">traditional</option>
-              </Select>
-            </Field>
-            <Field label="Visibility">
-              <Select value={draft.visibilityCode} onChange={(e) => set("visibilityCode", e.target.value)}>
-                <option value="private">private</option>
-                <option value="public">public</option>
-              </Select>
-            </Field>
-            <Field label="Scoring">
-              <Select value={draft.scoringCode} onChange={(e) => set("scoringCode", e.target.value)}>
-                <option value="icpc">icpc</option>
-                <option value="ioi">ioi</option>
-              </Select>
-            </Field>
-            <Field label="Status">
-              <Select value={draft.statusCode} onChange={(e) => set("statusCode", e.target.value)}>
-                <option value="draft">draft</option>
-                <option value="pending_review">pending_review</option>
+            <Field label="Scoring" id="scoring">
+              <Select id="scoring" value={draft.scoringCode} onChange={(e) => set("scoringCode", e.target.value)}>
+                <option value="icpc">ICPC</option>
+                <option value="ioi">IOI</option>
               </Select>
             </Field>
           </div>
         </Card>
 
+        {/* Limits */}
         <Card>
-          <SectionHead
-            eyebrow="Statement"
-            title="Inline markdown or stored asset"
-            description="Markdown can live inline in Postgres, or as a stored Markdown/PDF asset."
-          />
-          <Field label="Statement mode">
-            <Select
-              value={draft.statementMode}
-              onChange={(e) => set("statementMode", e.target.value as StatementMode)}
-            >
-              <option value="inline">Inline markdown</option>
-              <option value="markdown_file">Markdown file upload</option>
-              <option value="pdf_file">PDF upload</option>
-            </Select>
-          </Field>
-          {draft.statementMode === "inline" ? (
-            <Field label="Statement markdown">
-              <Textarea
-                value={draft.statementMd}
-                onChange={(e) => set("statementMd", e.target.value)}
-                rows={18}
-                className="font-mono text-[12.5px]"
+          <h3 className="text-[14px] font-semibold mb-4">Limits</h3>
+          <div className="grid grid-cols-3 gap-4">
+            <Field label="Time (ms)" id="timeLimitMs" error={errors.timeLimitMs}>
+              <Input
+                id="timeLimitMs"
+                type="number"
+                value={draft.timeLimitMs}
+                onChange={(e) => set("timeLimitMs", e.target.value)}
+                onBlur={() => handleBlur("timeLimitMs", draft.timeLimitMs)}
+                className={errors.timeLimitMs ? "border-[var(--color-err-fg)]" : ""}
               />
             </Field>
-          ) : (
-            <Field label={draft.statementMode === "pdf_file" ? "Statement PDF" : "Statement markdown file"} hint="Up to 2 MB.">
-              <input
-                type="file"
-                accept={draft.statementMode === "pdf_file" ? ".pdf,application/pdf" : ".md,.markdown,text/markdown,text/plain"}
-                onChange={(e) => setStatementFile(e.target.files?.[0] ?? null)}
-                className="text-[13px]"
+            <Field label="Memory (KB)" id="memoryLimitKb" error={errors.memoryLimitKb}>
+              <Input
+                id="memoryLimitKb"
+                type="number"
+                value={draft.memoryLimitKb}
+                onChange={(e) => set("memoryLimitKb", e.target.value)}
+                onBlur={() => handleBlur("memoryLimitKb", draft.memoryLimitKb)}
+                className={errors.memoryLimitKb ? "border-[var(--color-err-fg)]" : ""}
               />
-              {statementFile ? (
-                <FilePill name={statementFile.name} size={statementFile.size} onRemove={() => setStatementFile(null)} />
-              ) : canReuseStatement && initialData.statementObject ? (
-                <div className="mt-1 text-[12px] text-[var(--color-text-tertiary)]">
-                  Current: {initialData.statementObject.original_filename ?? initialData.statementObject.object_key}
-                </div>
-              ) : null}
             </Field>
-          )}
-          <Field label="Statement attachments" hint="Figures, PDFs, or assets referenced in the statement.">
-            <input
-              type="file"
-              multiple
-              onChange={(e) => setStatementAssets(Array.from(e.target.files ?? []))}
-              className="text-[13px]"
-            />
-            {statementAssets.length ? (
-              <div className="mt-1 flex flex-wrap gap-1">
-                {statementAssets.map((f, i) => (
-                  <FilePill
-                    key={i}
-                    name={f.name}
-                    size={f.size}
-                    onRemove={() =>
-                      setStatementAssets((arr) => arr.filter((_, idx) => idx !== i))
-                    }
-                  />
+            <Field label="Output (KB)" id="outputLimitKb" error={errors.outputLimitKb}>
+              <Input
+                id="outputLimitKb"
+                type="number"
+                value={draft.outputLimitKb}
+                onChange={(e) => set("outputLimitKb", e.target.value)}
+                onBlur={() => handleBlur("outputLimitKb", draft.outputLimitKb)}
+                className={errors.outputLimitKb ? "border-[var(--color-err-fg)]" : ""}
+              />
+            </Field>
+          </div>
+        </Card>
+
+        {/* Statement */}
+        <Card>
+          <h3 className="text-[14px] font-semibold mb-4">Statement</h3>
+          {/* Statement mode selector */}
+          <div className="flex gap-2 mb-3">
+            {(["inline", "markdown_file", "pdf_file"] as StatementMode[]).map((m) => (
+              <button
+                key={m}
+                type="button"
+                className={`px-3 py-1.5 text-[12px] rounded-[var(--radius-md)] ${draft.statementMode === m ? "bg-[var(--color-accent)] text-white" : "bg-[var(--color-bg-muted)] text-[var(--color-text-secondary)]"}`}
+                onClick={() => set("statementMode", m)}
+              >
+                {m === "inline" ? "Inline MD" : m === "markdown_file" ? "MD File" : "PDF File"}
+              </button>
+            ))}
+          </div>
+
+          {draft.statementMode === "inline" && (
+            <>
+              {/* Editor mode tabs */}
+              <div className="flex gap-1 mb-2">
+                {(["edit", "preview", "split"] as const).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    className={`px-3 py-1 text-[12px] rounded-[var(--radius-md)] capitalize ${editorMode === m ? "bg-[var(--color-accent)] text-white" : "bg-[var(--color-bg-muted)] text-[var(--color-text-secondary)]"}`}
+                    onClick={() => setEditorMode(m)}
+                  >
+                    {m}
+                  </button>
                 ))}
               </div>
-            ) : null}
-            {mode === "edit" && initialData.statementAssets.length ? (
-              <div className="mt-2 space-y-1">
-                <div className="flex flex-wrap gap-1">
-                  {initialData.statementAssets.map((a) => (
-                    <Chip key={a.id} tone="neutral">
-                      {a.object.original_filename ?? a.logical_name ?? a.object.object_key}
-                    </Chip>
-                  ))}
-                </div>
-                <label className="inline-flex items-center gap-2 text-[12px] text-[var(--color-text-secondary)]">
+              <div className="min-h-[400px] hairline rounded-[var(--radius-md)] overflow-hidden">
+                {editorMode === "edit" && (
+                  <Editor
+                    height="400px"
+                    language="markdown"
+                    value={draft.statementMd}
+                    onChange={(v) => set("statementMd", v ?? "")}
+                    options={{ minimap: { enabled: false }, wordWrap: "on", lineNumbers: "off", fontSize: 13, scrollBeyondLastLine: false }}
+                  />
+                )}
+                {editorMode === "preview" && (
+                  <div className="p-4 h-[400px] overflow-auto">
+                    <MarkdownPreview content={draft.statementMd} />
+                  </div>
+                )}
+                {editorMode === "split" && (
+                  <PanelGroup direction="horizontal">
+                    <Panel defaultSize={50} minSize={30}>
+                      <Editor
+                        height="400px"
+                        language="markdown"
+                        value={draft.statementMd}
+                        onChange={(v) => set("statementMd", v ?? "")}
+                        options={{ minimap: { enabled: false }, wordWrap: "on", lineNumbers: "off", fontSize: 13, scrollBeyondLastLine: false }}
+                      />
+                    </Panel>
+                    <PanelResizeHandle className="w-1.5 bg-[var(--color-border-hair)] hover:bg-[var(--color-accent)] transition-colors" />
+                    <Panel defaultSize={50} minSize={30}>
+                      <div className="p-4 h-[400px] overflow-auto">
+                        <MarkdownPreview content={draft.statementMd} />
+                      </div>
+                    </Panel>
+                  </PanelGroup>
+                )}
+              </div>
+            </>
+          )}
+
+          {draft.statementMode !== "inline" && (
+            <div className="space-y-3">
+              {canReuseStatement && initialData.statementObject && (
+                <p className="text-[12px] text-[var(--color-text-secondary)]">
+                  Current: {initialData.statementObject.original_filename ?? "uploaded file"}
+                </p>
+              )}
+              <label className="flex items-center gap-2 cursor-pointer text-[13px] text-[var(--color-accent)]">
+                <Upload size={14} />
+                {statementFile ? statementFile.name : "Choose file"}
+                <input
+                  type="file"
+                  className="hidden"
+                  accept={draft.statementMode === "pdf_file" ? ".pdf" : ".md"}
+                  onChange={(e) => setStatementFile(e.target.files?.[0] ?? null)}
+                />
+              </label>
+            </div>
+          )}
+
+          {/* Statement assets */}
+          {draft.statementMode === "inline" && (
+            <div className="mt-4">
+              <Label>Statement assets (images)</Label>
+              {mode === "edit" && initialData.statementAssets.length > 0 && (
+                <label className="flex items-center gap-2 text-[12px] text-[var(--color-text-secondary)] mb-2">
                   <input
                     type="checkbox"
                     checked={draft.replaceStatementAssets}
                     onChange={(e) => set("replaceStatementAssets", e.target.checked)}
                   />
-                  Replace existing assets with uploaded batch
+                  Replace existing assets
                 </label>
-              </div>
-            ) : null}
-          </Field>
+              )}
+              <label className="flex items-center gap-2 cursor-pointer text-[13px] text-[var(--color-accent)]">
+                <Upload size={14} />
+                Add images
+                <input
+                  type="file"
+                  className="hidden"
+                  multiple
+                  accept="image/*"
+                  onChange={(e) => setStatementAssets(Array.from(e.target.files ?? []))}
+                />
+              </label>
+              {statementAssets.length > 0 && (
+                <div className="flex flex-wrap gap-2 mt-2">
+                  {statementAssets.map((f, i) => (
+                    <Chip key={i} tone="neutral">
+                      {f.name} ({formatBytes(f.size)})
+                      <button type="button" onClick={() => setStatementAssets((a) => a.filter((_, j) => j !== i))}>
+                        <X size={12} />
+                      </button>
+                    </Chip>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </Card>
 
+        {/* Tags — chip selector */}
         <Card>
-          <SectionHead eyebrow="Limits" title="Runtime envelope" />
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <Field label="Time limit (ms)">
-              <Input inputMode="numeric" value={draft.timeLimitMs} onChange={(e) => set("timeLimitMs", e.target.value)} />
-            </Field>
-            <Field label="Memory limit (KB)">
-              <Input inputMode="numeric" value={draft.memoryLimitKb} onChange={(e) => set("memoryLimitKb", e.target.value)} />
-            </Field>
-            <Field label="Output limit (KB)">
-              <Input inputMode="numeric" value={draft.outputLimitKb} onChange={(e) => set("outputLimitKb", e.target.value)} />
-            </Field>
-          </div>
-        </Card>
-
-        <Card>
-          <SectionHead eyebrow="Tags" title="Classification" />
-          <Field label="Tag slugs" hint="Comma-separated list of tag slugs.">
-            <Input
-              value={draft.tagInput}
-              onChange={(e) => set("tagInput", e.target.value)}
-              placeholder="arrays, graphs"
-            />
-          </Field>
+          <h3 className="text-[14px] font-semibold mb-4">Tags</h3>
+          {/* Selected tags as removable chips */}
+          {draft.selectedTags.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-3">
+              {draft.selectedTags.map((slug) => {
+                const tag = tags.find((t) => t.slug === slug);
+                return (
+                  <Chip key={slug} tone="accent">
+                    {tag?.name ?? slug}
+                    <button type="button" onClick={() => set("selectedTags", draft.selectedTags.filter((s) => s !== slug))}>
+                      <X size={12} />
+                    </button>
+                  </Chip>
+                );
+              })}
+            </div>
+          )}
+          {/* Filter input */}
+          <Input
+            placeholder="Filter tags…"
+            value={tagFilter}
+            onChange={(e) => setTagFilter(e.target.value)}
+            className="mb-3 h-8 text-[12px]"
+          />
+          {/* Available tag buttons */}
           {tagsQ.isLoading ? (
-            <Skeleton className="h-8" />
-          ) : tags.length ? (
-            <div>
-              <Label>Available</Label>
-              <div className="mt-1 flex flex-wrap gap-1">
-                {tags.map((t) => {
-                  const active = selectedTags.includes(t.slug);
+            <Skeleton className="h-8 w-full" />
+          ) : (
+            <div className="flex flex-wrap gap-1.5">
+              {tags
+                .filter((t) => t.name.toLowerCase().includes(tagFilter.toLowerCase()))
+                .map((t) => {
+                  const selected = draft.selectedTags.includes(t.slug);
                   return (
                     <button
-                      type="button"
                       key={t.slug}
-                      onClick={() => {
-                        const exist = parseTags(draft.tagInput);
-                        const next = active ? exist.filter((x) => x !== t.slug) : [...exist, t.slug];
-                        set("tagInput", next.join(", "));
-                      }}
-                      className={
-                        "rounded-full px-2.5 py-0.5 text-[11.5px] transition-colors hairline " +
-                        (active
-                          ? "bg-[var(--color-accent)] text-[var(--color-accent-fg)] border-transparent"
-                          : "bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-muted)]")
+                      type="button"
+                      className={`px-2.5 py-1 text-[11.5px] rounded-[var(--radius-pill)] transition-colors ${selected ? "bg-[var(--color-accent)] text-white" : "bg-[var(--color-bg-muted)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-sunken)]"}`}
+                      onClick={() =>
+                        set(
+                          "selectedTags",
+                          selected
+                            ? draft.selectedTags.filter((s) => s !== t.slug)
+                            : [...draft.selectedTags, t.slug],
+                        )
                       }
                     >
                       {t.name}
                     </button>
                   );
                 })}
-              </div>
             </div>
-          ) : null}
+          )}
         </Card>
 
+        {/* Testset — read-only status */}
         <Card>
-          <SectionHead
-            eyebrow="Testset"
-            title="Archive upload & extraction"
-            description="Zip with matching 1.in / 1.out file pairs. A new archive replaces the current active testsets."
-          />
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <Field label="Testset type">
-              <Select value={draft.testsetTypeCode} onChange={(e) => set("testsetTypeCode", e.target.value)}>
-                <option value="primary">primary</option>
-                <option value="samples">samples</option>
-                <option value="hidden">hidden</option>
-                <option value="custom">custom</option>
-              </Select>
-            </Field>
-            <Field label="Title">
-              <Input value={draft.testsetTitle} onChange={(e) => set("testsetTitle", e.target.value)} />
-            </Field>
-          </div>
-          <Field label="Note">
-            <Textarea value={draft.testsetNote} onChange={(e) => set("testsetNote", e.target.value)} rows={2} />
-          </Field>
-          <Field label="Zip archive">
-            <input
-              type="file"
-              accept=".zip,application/zip,application/x-zip-compressed"
-              onChange={(e) => setTestsetArchive(e.target.files?.[0] ?? null)}
-              className="text-[13px]"
-            />
-            {testsetArchive ? (
-              <FilePill name={testsetArchive.name} size={testsetArchive.size} onRemove={() => setTestsetArchive(null)} />
-            ) : null}
-            {mode === "edit" && initialData.testsets.length ? (
-              <div className="mt-1 flex flex-wrap gap-1">
-                {initialData.testsets.map((t) => (
-                  <Chip key={t.id} tone="neutral">
-                    {t.title ?? t.testset_type_code} · {t.extracted_case_count} cases
-                  </Chip>
-                ))}
-              </div>
-            ) : null}
-          </Field>
+          <h3 className="text-[14px] font-semibold mb-4">Testset</h3>
+          {mode === "create" ? (
+            <p className="text-[13px] text-[var(--color-text-secondary)]">Upload testsets after creating the problem.</p>
+          ) : testsetReady ? (
+            <div className="space-y-2">
+              <p className="text-[13px] text-[var(--color-text-primary)]">
+                {initialData.testsets.length} testset{initialData.testsets.length > 1 ? "s" : ""} configured
+              </p>
+              <Link
+                to={`/dashboard/problems/${initialData.id}/testsets`}
+                className="text-[13px] text-[var(--color-accent)] underline"
+              >
+                Manage testsets →
+              </Link>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-[13px] text-[var(--color-text-secondary)]">No testset uploaded.</p>
+              <Link
+                to={`/dashboard/problems/${initialData.id}/testsets`}
+                className="text-[13px] text-[var(--color-accent)] underline"
+              >
+                Upload testsets →
+              </Link>
+            </div>
+          )}
         </Card>
 
+        {/* Checker — collapsible */}
         <Card>
-          <SectionHead eyebrow="Checker" title="Diff or custom checker" />
-          <Field label="Checker type">
-            <Select value={draft.checkerTypeCode} onChange={(e) => set("checkerTypeCode", e.target.value)}>
-              <option value="diff">diff</option>
-              <option value="custom">custom</option>
-            </Select>
-          </Field>
-          <Field label="Note">
-            <Textarea value={draft.checkerNote} onChange={(e) => set("checkerNote", e.target.value)} rows={2} />
-          </Field>
-          {draft.checkerTypeCode === "custom" ? (
+          {!checkerExpanded && draft.checkerTypeCode === "diff" ? (
+            <div className="flex items-center justify-between">
+              <span className="text-[13px] text-[var(--color-text-primary)]">Checker: diff (default)</span>
+              <button
+                type="button"
+                className="text-[12px] text-[var(--color-accent)]"
+                onClick={() => setCheckerExpanded(true)}
+              >
+                Configure
+              </button>
+            </div>
+          ) : (
             <>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <Field label="Checker runtime">
+              <h3 className="text-[14px] font-semibold mb-4">Checker</h3>
+              <div className="space-y-4">
+                <Field label="Checker type" id="checkerType">
                   <Select
-                    value={draft.checkerRuntimeProfileKey}
-                    onChange={(e) => set("checkerRuntimeProfileKey", e.target.value)}
+                    id="checkerType"
+                    value={draft.checkerTypeCode}
+                    onChange={(e) => {
+                      set("checkerTypeCode", e.target.value);
+                      if (e.target.value === "custom") setCheckerExpanded(true);
+                    }}
                   >
-                    <option value="">Choose runtime</option>
-                    {runtimes.map((r) => (
-                      <option key={r.id} value={r.profile_key}>
-                        {r.runtime_name} ({r.profile_key})
-                      </option>
-                    ))}
+                    <option value="diff">diff</option>
+                    <option value="custom">custom</option>
                   </Select>
                 </Field>
-                <Field label="Entrypoint">
+                {draft.checkerTypeCode === "custom" && (
+                  <>
+                    <Field label="Runtime profile" id="checkerRuntime">
+                      {runtimesQ.isLoading ? (
+                        <Skeleton className="h-10 w-full" />
+                      ) : (
+                        <Select
+                          id="checkerRuntime"
+                          value={draft.checkerRuntimeProfileKey}
+                          onChange={(e) => set("checkerRuntimeProfileKey", e.target.value)}
+                        >
+                          <option value="">Select runtime…</option>
+                          {runtimes.map((r) => (
+                            <option key={r.profile_key} value={r.profile_key}>
+                              {r.runtime_name}
+                            </option>
+                          ))}
+                        </Select>
+                      )}
+                    </Field>
+                    <Field label="Entrypoint" id="checkerEntrypoint">
+                      <Input
+                        id="checkerEntrypoint"
+                        value={draft.checkerEntrypoint}
+                        onChange={(e) => set("checkerEntrypoint", e.target.value)}
+                      />
+                    </Field>
+                    <div>
+                      <Label>Checker source</Label>
+                      {canReuseChecker && initialData.activeChecker?.source_object && (
+                        <p className="text-[12px] text-[var(--color-text-secondary)] mb-1">
+                          Current: {initialData.activeChecker.source_object.original_filename ?? "uploaded"}
+                        </p>
+                      )}
+                      <label className="flex items-center gap-2 cursor-pointer text-[13px] text-[var(--color-accent)]">
+                        <Upload size={14} />
+                        {checkerSource ? checkerSource.name : "Choose file"}
+                        <input
+                          type="file"
+                          className="hidden"
+                          onChange={(e) => setCheckerSource(e.target.files?.[0] ?? null)}
+                        />
+                      </label>
+                    </div>
+                  </>
+                )}
+                <Field label="Note" id="checkerNote">
                   <Input
-                    value={draft.checkerEntrypoint}
-                    onChange={(e) => set("checkerEntrypoint", e.target.value)}
-                    placeholder="checker.cpp"
+                    id="checkerNote"
+                    value={draft.checkerNote}
+                    onChange={(e) => set("checkerNote", e.target.value)}
+                    placeholder="Optional note"
                   />
                 </Field>
               </div>
-              <Field label="Checker source">
-                <input
-                  type="file"
-                  onChange={(e) => setCheckerSource(e.target.files?.[0] ?? null)}
-                  className="text-[13px]"
-                />
-                {checkerSource ? (
-                  <FilePill name={checkerSource.name} size={checkerSource.size} onRemove={() => setCheckerSource(null)} />
-                ) : canReuseChecker && initialData.activeChecker?.source_object ? (
-                  <div className="mt-1 text-[12px] text-[var(--color-text-tertiary)]">
-                    Current: {initialData.activeChecker.source_object.original_filename ?? initialData.activeChecker.source_object.object_key}
-                  </div>
-                ) : null}
-              </Field>
             </>
-          ) : null}
+          )}
         </Card>
 
-        {progress ? (
-          <Banner tone="info" title={progress.percent != null ? `${progress.percent}% uploaded` : "Uploading…"}>
-            {progress.total ? (
-              <div>
-                {formatBytes(progress.loaded)} / {formatBytes(progress.total)}
-              </div>
-            ) : null}
-            {progress.percent != null ? (
-              <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-[var(--color-bg-muted)]">
-                <div className="h-full bg-[var(--color-accent)]" style={{ width: `${progress.percent}%` }} />
-              </div>
-            ) : null}
-          </Banner>
-        ) : null}
-
-        {err ? <Banner tone="err" title={mode === "create" ? "Create failed" : "Save failed"}>{err}</Banner> : null}
-
-        {!accessToken ? (
-          <Banner tone="warn" title="Sign-in required">
-            <Link
-              to={`/login?redirectTo=${encodeURIComponent(loginRedirectPath)}`}
-              className="text-[var(--color-info-fg)] underline"
-            >
-              Sign in
-            </Link>{" "}
-            to save problems.
-          </Banner>
-        ) : null}
-
-        <div className="flex flex-wrap items-center gap-2">
+        {/* Submit buttons */}
+        <div className="flex items-center gap-3">
           <button
-            type="submit"
-            disabled={busy}
-            className="inline-flex h-10 items-center gap-1 rounded-full bg-[var(--color-accent)] px-4 text-[13px] font-medium text-[var(--color-accent-fg)] disabled:opacity-50"
+            type="button"
+            disabled={busy || !dirty}
+            className="px-4 py-2 text-[13px] font-medium rounded-[var(--radius-md)] bg-[var(--color-bg-muted)] text-[var(--color-text-primary)] hover:bg-[var(--color-bg-sunken)] disabled:opacity-50"
+            onClick={() => handleSubmit(draftIntent)}
           >
-            <Upload className="h-3.5 w-3.5" />
-            {busy && intent === "manual" ? submittingLabel : submitLabel}
+            {busy && intent === draftIntent ? submittingLabel : draftButtonLabel}
           </button>
           <button
             type="button"
-            disabled={busy}
-            onClick={() => void handleSubmit("save_draft")}
-            className="inline-flex h-10 items-center rounded-full hairline bg-[var(--color-bg-elevated)] px-4 text-[13px] hover:bg-[var(--color-bg-muted)] disabled:opacity-50"
+            disabled={busy || !canSubmitForReview}
+            className="px-4 py-2 text-[13px] font-medium rounded-[var(--radius-md)] bg-[var(--color-accent)] text-white hover:opacity-90 disabled:opacity-50"
+            onClick={() => handleSubmit("request_review")}
           >
-            {busy && intent === "save_draft" ? "Saving draft…" : "Save draft"}
+            {busy && intent === "request_review" ? submittingLabel : "Submit for review"}
           </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void handleSubmit("request_review")}
-            className="inline-flex h-10 items-center rounded-full hairline bg-[var(--color-bg-elevated)] px-4 text-[13px] hover:bg-[var(--color-bg-muted)] disabled:opacity-50"
-          >
-            {busy && intent === "request_review" ? "Submitting…" : "Request review"}
-          </button>
-          {mode === "edit" && initialData.id ? (
-            <Link
-              to={`/dashboard/problems/${initialData.id}/testsets`}
-              className="inline-flex h-10 items-center rounded-full hairline bg-[var(--color-bg-elevated)] px-4 text-[13px] hover:bg-[var(--color-bg-muted)]"
-            >
-              Manage testsets
-            </Link>
-          ) : null}
+          {autosavedAt && (
+            <span className="text-[11px] text-[var(--color-text-tertiary)] ml-auto">
+              Autosaved {new Date(autosavedAt).toLocaleTimeString()}
+            </span>
+          )}
         </div>
-      </form>
 
-      <aside className="space-y-3">
-        <Card>
-          <div className="text-eyebrow">Draft status</div>
-          <div className="mt-2 space-y-1 text-[12.5px]">
-            <div>
-              <Chip tone={dirty ? "warn" : "ok"}>{dirty ? "Unsaved" : "Saved"}</Chip>
-            </div>
-            <div className="text-[12px] text-[var(--color-text-tertiary)]">
-              Autosave {autosavedAt ? new Date(autosavedAt).toLocaleTimeString() : "idle"}
-            </div>
-            {hasFiles ? (
-              <div className="text-[11.5px] text-[var(--color-text-tertiary)]">Files are not autosaved.</div>
-            ) : null}
+        {/* Upload progress */}
+        {progress && (
+          <div className="text-[12px] text-[var(--color-text-secondary)]">
+            Uploading… {Math.round((progress.loaded / (progress.total || 1)) * 100)}%
           </div>
-          <div className="mt-3 flex gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                setDraft(initial);
-                setStatementFile(null);
-                setStatementAssets([]);
-                setTestsetArchive(null);
-                setCheckerSource(null);
-                setErr(null);
-              }}
-              className="rounded-full hairline bg-[var(--color-bg-elevated)] px-3 py-1 text-[12px] hover:bg-[var(--color-bg-muted)]"
-            >
-              Reset
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                localStorage.removeItem(storageKey);
-                setAutosavedAt(null);
-              }}
-              className="rounded-full hairline bg-[var(--color-bg-elevated)] px-3 py-1 text-[12px] hover:bg-[var(--color-bg-muted)]"
-            >
-              Clear autosave
-            </button>
-          </div>
-        </Card>
+        )}
+      </div>
 
+      {/* Sidebar */}
+      <div className="space-y-5">
+        {/* Readiness checklist */}
         <Card>
-          <div className="text-eyebrow">Runtime catalog</div>
-          <ul className="mt-2 space-y-1 text-[12.5px]">
-            {runtimesQ.isLoading ? (
-              <Skeleton className="h-16" />
-            ) : (
-              runtimes.map((r) => (
-                <li key={r.id} className="flex items-baseline justify-between gap-2">
-                  <span>{r.runtime_name}</span>
-                  <span className="font-mono text-[11px] text-[var(--color-text-tertiary)]">{r.profile_key}</span>
-                </li>
-              ))
-            )}
+          <h3 className="text-[14px] font-semibold mb-3">Readiness</h3>
+          <ul className="space-y-2 text-[13px]">
+            <li className="flex items-center gap-2">
+              {basicInfoReady ? <CheckCircle2 size={16} className="text-[var(--color-ok-fg)]" /> : <Circle size={16} className="text-[var(--color-text-tertiary)]" />}
+              Basic info
+            </li>
+            <li className="flex items-center gap-2">
+              {statementReady ? <CheckCircle2 size={16} className="text-[var(--color-ok-fg)]" /> : <Circle size={16} className="text-[var(--color-text-tertiary)]" />}
+              Statement
+            </li>
+            <li className="flex items-center gap-2">
+              {testsetReady ? <CheckCircle2 size={16} className="text-[var(--color-ok-fg)]" /> : <Circle size={16} className="text-[var(--color-text-tertiary)]" />}
+              Testset
+            </li>
+            <li className="flex items-center gap-2">
+              {checkerReady ? <CheckCircle2 size={16} className="text-[var(--color-ok-fg)]" /> : <Circle size={16} className="text-[var(--color-text-tertiary)]" />}
+              Checker
+            </li>
           </ul>
         </Card>
-
-        {mode === "edit" && initialData.id ? (
-          <Card>
-            <div className="text-eyebrow">Surfaces</div>
-            <div className="mt-2 flex flex-col gap-1 text-[12.5px]">
-              <Link to="/dashboard/problems" className="hover:underline">
-                All problems
-              </Link>
-              <Link to={`/problems/${initialData.slug}`} className="hover:underline">
-                Public detail
-              </Link>
-              <Link to={`/problems/${initialData.slug}/solve`} className="hover:underline">
-                Solve workspace
-              </Link>
-            </div>
-          </Card>
-        ) : null}
-      </aside>
+      </div>
     </div>
-  );
-}
-
-function SectionHead({
-  eyebrow,
-  title,
-  description,
-}: {
-  eyebrow: string;
-  title: string;
-  description?: string;
-}) {
-  return (
-    <header className="mb-3">
-      <div className="text-eyebrow">{eyebrow}</div>
-      <h2 className="text-h3">{title}</h2>
-      {description ? (
-        <p className="text-[12.5px] text-[var(--color-text-secondary)]">{description}</p>
-      ) : null}
-    </header>
-  );
-}
-
-function FilePill({ name, size, onRemove }: { name: string; size: number; onRemove: () => void }) {
-  return (
-    <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-[var(--color-bg-muted)] hairline px-2 py-0.5 text-[11.5px]">
-      {name} · {formatBytes(size)}
-      <button
-        type="button"
-        onClick={onRemove}
-        className="text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]"
-      >
-        <X className="h-3 w-3" />
-      </button>
-    </span>
   );
 }

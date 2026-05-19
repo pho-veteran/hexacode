@@ -87,6 +87,18 @@ variable "chat_throttle_rate_limit" {
   default     = 10
 }
 
+variable "default_throttle_burst_limit" {
+  description = "Default burst limit for all routes (requests per second)"
+  type        = number
+  default     = 200
+}
+
+variable "default_throttle_rate_limit" {
+  description = "Default steady-state rate limit for all routes (requests per second)"
+  type        = number
+  default     = 100
+}
+
 variable "cors_lambda_arn" {
   description = "ARN of the CORS Lambda function"
   type        = string

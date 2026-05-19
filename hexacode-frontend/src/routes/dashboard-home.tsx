@@ -2,7 +2,7 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, Files, Tags, Users, Wrench, HardDrive, PlusCircle } from "lucide-react";
 import type { PermissionCode } from "@/lib/api";
-import { getDashboardProblems } from "@/lib/api";
+import { getDashboardProblems, getDashboardUsers } from "@/lib/api";
 import { Card } from "@/components/ui/Card";
 import { Skeleton, ErrorBanner } from "@/components/ui/Feedback";
 import { StatusChip, DifficultyChip } from "@/components/ui/Chip";
@@ -23,11 +23,26 @@ export function DashboardHomeRoute() {
   const auth = useAuth();
   const canViewOwnProblems = auth.hasPermission("problem.read_own_dashboard");
   const canCreateProblem = auth.hasPermission("problem.create");
+  const canReview = auth.hasPermission("problem.read_review_queue");
+  const canViewUsers = auth.hasPermission("user.read_directory");
   const ctas = CTAS.filter((cta) => auth.hasAnyPermission(cta.permissions));
+
   const q = useQuery({
     queryKey: ["dashboard-problems", "mine"],
-    queryFn: () => getDashboardProblems("mine"),
+    queryFn: () => getDashboardProblems({ scope: "mine" }),
     enabled: auth.status === "authenticated" && canViewOwnProblems,
+  });
+
+  const reviewQ = useQuery({
+    queryKey: ["dashboard-problems", "review"],
+    queryFn: () => getDashboardProblems({ scope: "review", limit: 5 }),
+    enabled: auth.status === "authenticated" && canReview,
+  });
+
+  const usersQ = useQuery({
+    queryKey: ["dashboard-users", "count"],
+    queryFn: () => getDashboardUsers({ limit: 1 }),
+    enabled: auth.status === "authenticated" && canViewUsers,
   });
 
   if (auth.status !== "authenticated") return <AuthRequired />;
@@ -43,9 +58,11 @@ export function DashboardHomeRoute() {
     );
   }
 
-  const problems = q.data ?? [];
+  const problems = q.data?.data ?? [];
   const draftCount = problems.filter((p) => p.status === "draft").length;
   const publishedCount = problems.filter((p) => p.status === "published").length;
+  const reviewCount = reviewQ.data?.meta?.total ?? 0;
+  const usersCount = usersQ.data?.meta?.total ?? 0;
 
   return (
     <div className="space-y-6">
@@ -57,11 +74,21 @@ export function DashboardHomeRoute() {
         </p>
       </header>
 
-      {canViewOwnProblems ? (
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-          <Stat label="Authored" value={problems.length} loading={q.isLoading} />
-          <Stat label="Drafts" value={draftCount} loading={q.isLoading} />
-          <Stat label="Published" value={publishedCount} loading={q.isLoading} />
+      {canViewOwnProblems || canReview || canViewUsers ? (
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+          {canViewOwnProblems && (
+            <>
+              <Stat label="Authored" value={problems.length} loading={q.isLoading} />
+              <Stat label="Drafts" value={draftCount} loading={q.isLoading} />
+              <Stat label="Published" value={publishedCount} loading={q.isLoading} />
+            </>
+          )}
+          {canReview && (
+            <Stat label="Pending Review" value={reviewCount} loading={reviewQ.isLoading} accent />
+          )}
+          {canViewUsers && (
+            <Stat label="Users" value={usersCount} loading={usersQ.isLoading} />
+          )}
         </div>
       ) : (
         <Card>
@@ -88,6 +115,51 @@ export function DashboardHomeRoute() {
           );
         })}
       </div>
+
+      {canReview && reviewCount > 0 && (
+        <section>
+          <div className="flex items-end justify-between mb-2">
+            <div>
+              <div className="text-eyebrow">Needs attention</div>
+              <h2 className="text-h3">Awaiting your review</h2>
+            </div>
+            <Link
+              to="/dashboard/problems?scope=review"
+              className="text-[13px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] inline-flex items-center gap-1"
+            >
+              All <ArrowRight className="h-3 w-3" />
+            </Link>
+          </div>
+          {reviewQ.isLoading ? (
+            <Skeleton className="h-32" />
+          ) : reviewQ.isError ? (
+            <ErrorBanner message={(reviewQ.error as Error).message} onRetry={() => reviewQ.refetch()} />
+          ) : (
+            <div className="grid grid-cols-1 gap-2">
+              {(reviewQ.data?.data ?? []).map((p) => (
+                <Card key={p.id} className="py-3">
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <Link to={`/dashboard/problems/${p.id}/edit`} className="font-medium hover:underline">
+                      {p.title}
+                    </Link>
+                    <DifficultyChip value={p.difficulty} />
+                    <StatusChip value={p.status} />
+                    <span className="text-[11px] text-[var(--color-text-tertiary)] ml-auto">
+                      {formatRelative(p.updated_at)}
+                    </span>
+                    <Link
+                      to={`/dashboard/problems/${p.id}/edit`}
+                      className="text-[12px] text-[var(--color-accent)] hover:underline font-medium"
+                    >
+                      Review
+                    </Link>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
 
       {canViewOwnProblems ? (
         <section>
@@ -156,11 +228,11 @@ export function DashboardHomeRoute() {
   );
 }
 
-function Stat({ label, value, loading }: { label: string; value: number; loading?: boolean }) {
+function Stat({ label, value, loading, accent }: { label: string; value: number; loading?: boolean; accent?: boolean }) {
   return (
-    <Card>
+    <Card className={accent ? "border-[var(--color-accent)]" : undefined}>
       <div className="text-eyebrow">{label}</div>
-      <div className="mt-1 text-[28px] font-semibold tabular-nums">
+      <div className={`mt-1 text-[28px] font-semibold tabular-nums ${accent ? "text-[var(--color-accent)]" : ""}`}>
         {loading ? <Skeleton className="h-7 w-16" /> : value}
       </div>
     </Card>

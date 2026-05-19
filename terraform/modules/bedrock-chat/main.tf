@@ -530,6 +530,7 @@ resource "aws_lambda_function" "chat" {
   timeout                        = var.chat_lambda_timeout_seconds
   memory_size                    = 256
   reserved_concurrent_executions = var.reserved_concurrent_executions
+  publish                        = var.provisioned_concurrent_executions > 0
 
   environment {
     variables = {
@@ -542,6 +543,22 @@ resource "aws_lambda_function" "chat" {
   tags = {
     Name = "${local.name_prefix}-chat"
   }
+}
+
+resource "aws_lambda_alias" "chat_live" {
+  count = var.provisioned_concurrent_executions > 0 ? 1 : 0
+
+  name             = "live"
+  function_name    = aws_lambda_function.chat.function_name
+  function_version = aws_lambda_function.chat.version
+}
+
+resource "aws_lambda_provisioned_concurrency_config" "chat" {
+  count = var.provisioned_concurrent_executions > 0 ? 1 : 0
+
+  function_name                     = aws_lambda_function.chat.function_name
+  qualifier                         = aws_lambda_alias.chat_live[0].name
+  provisioned_concurrent_executions = var.provisioned_concurrent_executions
 }
 
 resource "aws_cloudwatch_metric_alarm" "chat_lambda_errors" {

@@ -3,6 +3,11 @@ output "chat_lambda_arn" {
   value       = aws_lambda_function.chat.arn
 }
 
+output "chat_lambda_invoke_arn" {
+  description = "Invoke ARN for API Gateway (uses alias when provisioned concurrency is enabled)"
+  value       = var.provisioned_concurrent_executions > 0 ? aws_lambda_alias.chat_live[0].invoke_arn : aws_lambda_function.chat.invoke_arn
+}
+
 output "chat_lambda_name" {
   description = "Name of the Bedrock-backed chat Lambda function"
   value       = aws_lambda_function.chat.function_name

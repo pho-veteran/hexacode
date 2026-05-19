@@ -126,8 +126,30 @@ export function getSubmissionFileUrl(submissionId: string, objectId: string) {
 
 // ---------- Dashboard / problems ----------
 
-export const getDashboardProblems = (scope: "mine" | "review" = "mine") =>
-  apiGet<DashboardProblemSummary[]>(`/api/dashboard/problems?scope=${encodeURIComponent(scope)}`);
+export type DashboardProblemsParams = {
+  scope?: "mine" | "review" | "all";
+  limit?: number;
+  offset?: number;
+  search?: string;
+  status?: string;
+  sort?: string;
+};
+
+export type PaginatedResponse<T> = { data: T[]; meta: { total: number; limit: number; offset: number } };
+
+export async function getDashboardProblems(
+  params: DashboardProblemsParams = {},
+): Promise<PaginatedResponse<DashboardProblemSummary>> {
+  const p = new URLSearchParams();
+  if (params.scope) p.set("scope", params.scope);
+  if (params.limit) p.set("limit", String(params.limit));
+  if (params.offset) p.set("offset", String(params.offset));
+  if (params.search) p.set("search", params.search);
+  if (params.status) p.set("status", params.status);
+  if (params.sort) p.set("sort", params.sort);
+  const qs = p.size ? `?${p.toString()}` : "";
+  return apiGet<PaginatedResponse<DashboardProblemSummary>>(`/api/dashboard/problems${qs}`);
+}
 
 export const getDashboardProblem = (id: string) =>
   apiGet<DashboardProblemDetail>(`/api/dashboard/problems/${id}`);
@@ -205,7 +227,29 @@ export const deleteDashboardTag = (id: string) =>
   apiDelete<{ id: string; slug: string; deleted: boolean }>(`/api/dashboard/tags/${id}`);
 
 // ---------- Users ----------
-export const getDashboardUsers = () => apiGet<DashboardUser[]>(`/api/dashboard/users`);
+export type DashboardUsersParams = {
+  limit?: number;
+  offset?: number;
+  search?: string;
+  role?: string;
+  status?: string;
+};
+
+export type DashboardUsersPaginated = {
+  data: DashboardUser[];
+  meta: { total: number; limit: number; offset: number };
+};
+
+export async function getDashboardUsers(params: DashboardUsersParams = {}) {
+  const p = new URLSearchParams();
+  if (params.limit) p.set("limit", String(params.limit));
+  if (params.offset) p.set("offset", String(params.offset));
+  if (params.search) p.set("search", params.search);
+  if (params.role) p.set("role", params.role);
+  if (params.status) p.set("status", params.status);
+  const qs = p.size ? `?${p.toString()}` : "";
+  return apiGet<DashboardUsersPaginated>(`/api/dashboard/users${qs}`);
+}
 export const transitionDashboardUser = (id: string, action: UserLifecycleAction) =>
   apiPost<DashboardUser>(`/api/dashboard/users/${id}/actions/${action}`);
 export const grantDashboardUserRole = (id: string, roleCode: RoleCode) =>

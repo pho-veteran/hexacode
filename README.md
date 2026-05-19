@@ -66,6 +66,7 @@ Local service ports from Compose:
   - local user bootstrap into `app_identity.users`
   - role and permission management
   - `/api/auth/me` and dashboard user administration
+  - audit logging for role/user changes
 - `problem-service`
   - public problem catalog and problem detail APIs
   - dashboard authoring flows for problems, tags, testsets, and checker metadata
@@ -135,6 +136,19 @@ This recreates:
 - Redis and ElasticMQ dependencies
 
 At this point the database is structurally ready, but it does not yet contain your curated problem catalog.
+
+## Database Migrations
+
+If upgrading an existing database (not a fresh reset), apply migrations in order:
+
+```powershell
+Get-Content hexacode-backend/db/migrations/001_add_indexes.sql | docker compose -f docker-compose.local.yml exec -T postgres psql -U hexacode -d hexacode
+Get-Content hexacode-backend/db/migrations/002_audit_log.sql | docker compose -f docker-compose.local.yml exec -T postgres psql -U hexacode -d hexacode
+Get-Content hexacode-backend/db/migrations/003_problem_version.sql | docker compose -f docker-compose.local.yml exec -T postgres psql -U hexacode -d hexacode
+Get-Content hexacode-backend/db/migrations/004_rejection_reason.sql | docker compose -f docker-compose.local.yml exec -T postgres psql -U hexacode -d hexacode
+```
+
+All migrations use `IF NOT EXISTS` / `IF NOT EXISTS` and are safe to re-run.
 
 ## Fresh Problem Data Import
 

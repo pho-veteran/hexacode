@@ -47,6 +47,17 @@ variable "reserved_concurrent_executions" {
   default     = 5
 }
 
+variable "provisioned_concurrent_executions" {
+  description = "Provisioned concurrency for the chat Lambda (0 = disabled). Eliminates cold starts."
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = var.provisioned_concurrent_executions >= 0
+    error_message = "provisioned_concurrent_executions must be >= 0."
+  }
+}
+
 variable "chat_lambda_timeout_seconds" {
   description = "Timeout for the chat Lambda in seconds"
   type        = number
