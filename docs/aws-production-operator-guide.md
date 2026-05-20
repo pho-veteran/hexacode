@@ -437,7 +437,7 @@ ADMIN_USERNAME="username-that-signed-in-once"
 python3 hexacode-backend/scripts/promote_admin.py --username "$ADMIN_USERNAME"
 ```
 
-Expected: the command exits `0` and prints JSON with `"promoted": true` and `"role_code": "admin"`.
+Expected: the command exits `0` and prints JSON with `"promoted": true` and `"role_code": "admin"`. The script accepts exactly one selector: `--username`, `--email`, `--cognito-sub`, or `--user-id`; use whichever value is easiest to verify from the first signed-in user.
 
 ## W5 dev smoke tests
 

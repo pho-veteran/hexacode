@@ -94,6 +94,7 @@ Create these security groups:
 - `sg_internal_alb`
 - `sg_api_services`
 - `sg_worker`
+- `sg_efs`
 - `sg_rds_proxy`
 - `sg_rds`
 - `sg_redis`
@@ -121,6 +122,11 @@ Use these rules:
   - inbound: none
   - outbound: `tcp/80` to `sg_internal_alb`
   - outbound: `tcp/443` to AWS APIs through NAT or interface endpoints
+  - outbound: `tcp/2049` to `sg_efs`
+
+- `sg_efs`
+  - inbound: `tcp/2049` from `sg_api_services` or the narrower submission-service security group used by Terraform
+  - inbound: `tcp/2049` from `sg_worker`
 
 - `sg_rds_proxy`
   - inbound: `tcp/5432` from `sg_api_services`
@@ -780,8 +786,8 @@ Because the examples inject JSON keys from a Secrets Manager secret, use Fargate
   ],
   "volumes": [],
   "networkMode": "awsvpc",
-  "memory": "4096",
-  "cpu": "2048",
+  "memory": "2048",
+  "cpu": "1024",
   "executionRoleArn": "arn:aws:iam::<account-id>:role/hexacode-prod-ecs-execution",
   "taskRoleArn": "arn:aws:iam::<account-id>:role/hexacode-prod-worker-task",
   "runtimePlatform": {

@@ -20,7 +20,7 @@ Hexacode is an online coding judge platform with:
   - global Bedrock-backed chat widget
 - `hexacode-backend/services/api-gateway`
   - public backend entrypoint
-  - `/api/chat/*` local API Gateway simulation via direct Lambda invoke
+  - local API Gateway simulation via direct Lambda invoke for `POST /api/chat/messages`
 - `hexacode-backend/services/identity-service`
   - `/api/auth/me`
   - user status
@@ -39,7 +39,7 @@ Hexacode is an online coding judge platform with:
   - queue consumer for judge execution
 - `hexacode-backend/services/chat-lambda`
   - AWS Lambda function (invoked by gateway via `/api/chat/*`), not a containerized microservice
-  - Bedrock-backed chat handler
+  - Bedrock Agent Runtime-backed chat handler using `BEDROCK_AGENT_ID` and `BEDROCK_AGENT_ALIAS_ID`
 
 ## Local Infrastructure
 
@@ -232,30 +232,36 @@ Cloud:
 
 - S3
 
-Store in PostgreSQL only:
+Store in PostgreSQL only object metadata and storage-driver metadata:
 
 - `bucket`
 - `object_key`
 - `content_type`
-- `size`
-- `checksum`
+- `size_bytes`
+- `sha256`
+- `etag`
 - `original_filename`
+- `metadata_json`
+- `storage_driver`
+- `filesystem_path`
+- `artifact_kind`
 
 Do not store:
 
-- absolute machine paths
-- Windows-specific paths
 - binary blobs in PostgreSQL
+- platform-specific local paths except controlled EFS artifact paths recorded through `filesystem_path`
 
 Recommended object key patterns:
 
-- `problem/{problem_id}/statement/{asset_id}.md`
-- `problem/{problem_id}/media/{asset_id}.pdf`
-- `testset/{testset_id}/archive/{asset_id}.zip`
-- `testset/{testset_id}/cases/{ordinal}/input.inp`
-- `testset/{testset_id}/cases/{ordinal}/output.out`
-- `submission/{submission_id}/source/{asset_id}.cpp`
-- `submission/{submission_id}/artifacts/{asset_id}.log`
+- `problem/{problem_id}/statement/{object_id}.{ext}`
+- `problem/{problem_id}/media/{object_id}-{filename}`
+- `testset/{testset_id}/archive/{object_id}.{ext}`
+- `testset/{testset_id}/cases/{ordinal}/input.{ext}`
+- `testset/{testset_id}/cases/{ordinal}/output.{ext}`
+- `problem/{problem_id}/checker/{object_id}.{ext}`
+- `problem/{problem_id}/checker/{checker_id}/compiled/{sha256}-{artifact}`
+- `submissions/{submission_id}/source/source.txt`
+- `submissions/{submission_id}/...` for worker stdout, stderr, and compile-log artifacts
 
 ## Queue Strategy
 
