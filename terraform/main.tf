@@ -90,13 +90,14 @@ module "rds" {
 }
 
 module "backup" {
-  source                = "./modules/backup"
-  environment           = var.environment
-  backup_vault_name     = "hexacode-${var.environment}-backup-vault"
-  backup_plan_name      = "hexacode-${var.environment}-daily-backups"
-  backup_selection_name = "hexacode-${var.environment}-protected-resources"
-  rds_instance_arn      = module.rds.db_instance_arn
-  efs_file_system_arns  = concat([module.efs.file_system_arn], var.backup_efs_file_system_arns)
+  source                   = "./modules/backup"
+  environment              = var.environment
+  backup_vault_name        = "hexacode-${var.environment}-backup-vault"
+  backup_plan_name         = "hexacode-${var.environment}-daily-backups"
+  backup_selection_name    = "hexacode-${var.environment}-protected-resources"
+  rds_instance_arn         = module.rds.db_instance_arn
+  efs_file_system_arns     = concat([module.efs.file_system_arn], var.backup_efs_file_system_arns)
+  additional_resource_arns = concat([module.s3_buckets.problem_bucket_arn], var.backup_additional_resource_arns)
 }
 
 module "rds_proxy" {
@@ -276,6 +277,28 @@ module "cloudfront" {
   web_acl_id           = module.waf.cloudfront_web_acl_arn
 }
 
+module "cost_controls" {
+  source = "./modules/cost-controls"
+
+  environment               = var.environment
+  region                    = var.region
+  budget_name               = var.cost_controls.budget_name
+  budget_limit_amount_usd   = var.cost_controls.budget_limit_amount_usd
+  alert_email               = var.cost_controls.alert_email
+  sns_topic_name            = var.cost_controls.sns_topic_name
+  lambda_name               = var.cost_controls.lambda_name
+  lambda_role_name          = var.cost_controls.lambda_role_name
+  lambda_basic_policy_arn   = var.cost_controls.lambda_basic_policy_arn
+  schedule_name             = var.cost_controls.schedule_name
+  scheduler_role_name       = var.cost_controls.scheduler_role_name
+  scheduler_policy_arn      = var.cost_controls.scheduler_policy_arn
+  schedule_expression       = var.cost_controls.schedule_expression
+  schedule_timezone         = var.cost_controls.schedule_timezone
+  anomaly_monitor_name      = var.cost_controls.anomaly_monitor_name
+  anomaly_subscription_name = var.cost_controls.anomaly_subscription_name
+  anomaly_threshold_usd     = var.cost_controls.anomaly_threshold_usd
+}
+
 module "ecs_services" {
   source                    = "./modules/ecs-services"
   environment               = var.environment
@@ -307,4 +330,5 @@ module "ecs_services" {
   judge_queue_url           = module.sqs.judge_queue_url
   internal_alb_dns_name     = module.alb.internal_alb_dns_name
   internal_service_base_url = "http://${module.alb.internal_alb_dns_name}"
+  scheduled_scaling_actions = var.ecs_scheduled_scaling_actions
 }

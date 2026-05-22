@@ -59,6 +59,20 @@ variable "efs_file_system_arns" {
   }
 }
 
+variable "additional_resource_arns" {
+  description = "Optional list of additional AWS Backup-supported resource ARNs to include in the backup selection."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition = alltrue([
+      for arn in var.additional_resource_arns :
+      trimspace(arn) != ""
+    ])
+    error_message = "additional_resource_arns must contain only non-empty ARNs."
+  }
+}
+
 variable "enable_failure_notifications" {
   description = "Create EventBridge and SNS resources for AWS Backup failure notifications."
   type        = bool

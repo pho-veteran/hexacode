@@ -160,3 +160,15 @@ variable "internal_service_base_url" {
   type        = string
   default     = ""
 }
+
+variable "scheduled_scaling_actions" {
+  description = "Scheduled ECS service scaling actions keyed by scheduled action name."
+  type = map(object({
+    service_key  = string
+    schedule     = string
+    timezone     = string
+    min_capacity = number
+    max_capacity = number
+  }))
+  default = {}
+}

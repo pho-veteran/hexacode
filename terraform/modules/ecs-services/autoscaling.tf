@@ -1,5 +1,14 @@
 # Autoscaling for ECS Services
 
+locals {
+  autoscaling_targets = {
+    identity   = aws_appautoscaling_target.identity_service
+    problem    = aws_appautoscaling_target.problem_service
+    submission = aws_appautoscaling_target.submission_service
+    worker     = aws_appautoscaling_target.worker
+  }
+}
+
 # =============================================================================
 # Identity Service Scaling
 # =============================================================================
@@ -241,4 +250,20 @@ resource "aws_cloudwatch_metric_alarm" "worker_queue_depth_scale_down" {
   }
 
   alarm_actions = [aws_appautoscaling_policy.worker_queue_scaling.arn]
+}
+
+resource "aws_appautoscaling_scheduled_action" "service" {
+  for_each = var.scheduled_scaling_actions
+
+  name               = each.key
+  service_namespace  = local.autoscaling_targets[each.value.service_key].service_namespace
+  resource_id        = local.autoscaling_targets[each.value.service_key].resource_id
+  scalable_dimension = local.autoscaling_targets[each.value.service_key].scalable_dimension
+  schedule           = each.value.schedule
+  timezone           = each.value.timezone
+
+  scalable_target_action {
+    min_capacity = each.value.min_capacity
+    max_capacity = each.value.max_capacity
+  }
 }

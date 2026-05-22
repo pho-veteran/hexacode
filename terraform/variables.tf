@@ -82,6 +82,20 @@ variable "backup_efs_file_system_arns" {
   }
 }
 
+variable "backup_additional_resource_arns" {
+  description = "Optional additional AWS Backup-supported resource ARNs to include in the AWS Backup selection."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition = alltrue([
+      for arn in var.backup_additional_resource_arns :
+      trimspace(arn) != ""
+    ])
+    error_message = "backup_additional_resource_arns must contain only non-empty ARNs."
+  }
+}
+
 variable "network_firewall_blocked_domains" {
   description = "Domains blocked by the Network Firewall denylist for W5 egress inspection evidence."
   type        = list(string)
@@ -171,4 +185,37 @@ variable "management_vpc_cidr_block" {
     condition     = can(cidrhost(var.management_vpc_cidr_block, 0))
     error_message = "management_vpc_cidr_block must be a valid IPv4 CIDR block."
   }
+}
+
+variable "ecs_scheduled_scaling_actions" {
+  description = "Scheduled ECS service scaling actions keyed by scheduled action name."
+  type = map(object({
+    service_key  = string
+    schedule     = string
+    timezone     = string
+    min_capacity = number
+    max_capacity = number
+  }))
+  default = {}
+}
+
+variable "cost_controls" {
+  description = "Live cost-governance controls that should be codified in Terraform."
+  type = object({
+    budget_name               = string
+    budget_limit_amount_usd   = number
+    alert_email               = string
+    sns_topic_name            = string
+    lambda_name               = string
+    lambda_role_name          = string
+    lambda_basic_policy_arn   = string
+    schedule_name             = string
+    scheduler_role_name       = string
+    scheduler_policy_arn      = string
+    schedule_expression       = string
+    schedule_timezone         = string
+    anomaly_monitor_name      = string
+    anomaly_subscription_name = string
+    anomaly_threshold_usd     = number
+  })
 }

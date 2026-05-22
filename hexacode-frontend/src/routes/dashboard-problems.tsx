@@ -160,7 +160,8 @@ export function DashboardProblemsRoute() {
     enabled: auth.status === "authenticated" && !auth.authzLoading && supportedScopes.length > 0,
   });
 
-  const totalPages = q.data ? Math.max(1, Math.ceil(q.data.meta.total / PAGE_SIZE)) : 1;
+  const total = q.data?.meta?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
 

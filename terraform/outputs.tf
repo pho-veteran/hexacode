@@ -490,3 +490,38 @@ output "worker_service_name" {
   description = "Name of the worker service"
   value       = module.ecs_services.worker_service_name
 }
+
+output "cost_controls_budget_name" {
+  description = "Name of the Terraform-managed daily AWS Budget"
+  value       = module.cost_controls.budget_name
+}
+
+output "cost_controls_sns_topic_arn" {
+  description = "ARN of the Terraform-managed cost alert SNS topic"
+  value       = module.cost_controls.sns_topic_arn
+}
+
+output "cost_controls_lambda_name" {
+  description = "Name of the Terraform-managed cost guard Lambda function"
+  value       = module.cost_controls.lambda_name
+}
+
+output "cost_controls_lambda_arn" {
+  description = "ARN of the Terraform-managed cost guard Lambda function"
+  value       = module.cost_controls.lambda_arn
+}
+
+output "cost_controls_schedule_name" {
+  description = "Name of the Terraform-managed EventBridge Scheduler schedule"
+  value       = module.cost_controls.schedule_name
+}
+
+output "cost_controls_anomaly_monitor_arn" {
+  description = "ARN of the Terraform-managed Cost Anomaly Detection monitor"
+  value       = module.cost_controls.anomaly_monitor_arn
+}
+
+output "cost_controls_anomaly_subscription_arn" {
+  description = "ARN of the Terraform-managed Cost Anomaly Detection subscription"
+  value       = module.cost_controls.anomaly_subscription_arn
+}

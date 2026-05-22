@@ -116,7 +116,7 @@ export function DashboardUsersRoute() {
     setConfirm({ userId: u.id, username: u.username ?? u.cognito_sub, action: "disable" });
   }
 
-  const total = q.data?.meta.total ?? 0;
+  const total = q.data?.meta?.total ?? 0;
   const users = q.data?.data ?? [];
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const currentPage = Math.floor(offset / PAGE_SIZE) + 1;

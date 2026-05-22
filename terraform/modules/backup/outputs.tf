@@ -57,3 +57,18 @@ output "backup_failure_topic_arn" {
   description = "SNS topic ARN for AWS Backup failure notifications."
   value       = try(aws_sns_topic.backup_failures[0].arn, null)
 }
+
+output "backup_observability_dashboard_name" {
+  description = "CloudWatch dashboard name for backup observability."
+  value       = try(aws_cloudwatch_dashboard.backup_observability[0].dashboard_name, null)
+}
+
+output "backup_failure_query_definition_id" {
+  description = "CloudWatch Logs Insights query definition ID for backup failure events."
+  value       = try(aws_cloudwatch_query_definition.backup_failure_events[0].query_definition_id, null)
+}
+
+output "backup_failure_query_definition_name" {
+  description = "CloudWatch Logs Insights query definition name for backup failure events."
+  value       = try(aws_cloudwatch_query_definition.backup_failure_events[0].name, null)
+}

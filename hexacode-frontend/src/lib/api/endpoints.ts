@@ -1,4 +1,4 @@
-import { apiDelete, apiGet, apiMultipart, apiPost, apiPut, buildApiUrl } from "./client";
+import { apiDelete, apiGet, apiGetPaginated, apiMultipart, apiPost, apiPut, buildApiUrl } from "./client";
 import type {
   AuthMe,
   ChatRequest,
@@ -135,7 +135,7 @@ export type DashboardProblemsParams = {
   sort?: string;
 };
 
-export type PaginatedResponse<T> = { data: T[]; meta: { total: number; limit: number; offset: number } };
+export type PaginatedResponse<T> = { data: T[]; meta?: { total: number; limit: number; offset: number } };
 
 export async function getDashboardProblems(
   params: DashboardProblemsParams = {},
@@ -148,7 +148,7 @@ export async function getDashboardProblems(
   if (params.status) p.set("status", params.status);
   if (params.sort) p.set("sort", params.sort);
   const qs = p.size ? `?${p.toString()}` : "";
-  return apiGet<PaginatedResponse<DashboardProblemSummary>>(`/api/dashboard/problems${qs}`);
+  return apiGetPaginated<DashboardProblemSummary, NonNullable<PaginatedResponse<DashboardProblemSummary>["meta"]>>(`/api/dashboard/problems${qs}`);
 }
 
 export const getDashboardProblem = (id: string) =>
@@ -237,7 +237,7 @@ export type DashboardUsersParams = {
 
 export type DashboardUsersPaginated = {
   data: DashboardUser[];
-  meta: { total: number; limit: number; offset: number };
+  meta?: { total: number; limit: number; offset: number };
 };
 
 export async function getDashboardUsers(params: DashboardUsersParams = {}) {
@@ -248,7 +248,7 @@ export async function getDashboardUsers(params: DashboardUsersParams = {}) {
   if (params.role) p.set("role", params.role);
   if (params.status) p.set("status", params.status);
   const qs = p.size ? `?${p.toString()}` : "";
-  return apiGet<DashboardUsersPaginated>(`/api/dashboard/users${qs}`);
+  return apiGetPaginated<DashboardUser, NonNullable<DashboardUsersPaginated["meta"]>>(`/api/dashboard/users${qs}`);
 }
 export const transitionDashboardUser = (id: string, action: UserLifecycleAction) =>
   apiPost<DashboardUser>(`/api/dashboard/users/${id}/actions/${action}`);

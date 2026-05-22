@@ -34,6 +34,11 @@ resource "aws_iam_role_policy_attachment" "backup_service_policy" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForBackup"
 }
 
+resource "aws_iam_role_policy_attachment" "backup_service_s3_policy" {
+  role       = aws_iam_role.backup_service.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForS3Backup"
+}
+
 resource "aws_backup_plan" "daily" {
   name = var.backup_plan_name
 
@@ -54,7 +59,7 @@ resource "aws_backup_plan" "daily" {
 }
 
 locals {
-  backup_resource_arns = compact(concat([var.rds_instance_arn], var.efs_file_system_arns))
+  backup_resource_arns = distinct(compact(concat([var.rds_instance_arn], var.efs_file_system_arns, var.additional_resource_arns)))
 }
 
 resource "aws_backup_selection" "protected_resources" {

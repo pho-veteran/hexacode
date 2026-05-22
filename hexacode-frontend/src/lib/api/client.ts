@@ -56,6 +56,18 @@ export async function apiGet<T>(path: string, config?: AxiosRequestConfig) {
   const res = await client.get<ApiEnvelope<T>>(path, config);
   return res.data.data;
 }
+
+export async function apiGetPaginated<T, M extends Record<string, unknown>>(
+  path: string,
+  config?: AxiosRequestConfig,
+) {
+  const res = await client.get<ApiEnvelope<T[]>>(path, config);
+  return {
+    data: res.data.data,
+    meta: res.data.meta as M | undefined,
+  };
+}
+
 export async function apiPost<T>(path: string, body?: unknown, config?: AxiosRequestConfig) {
   const res = await client.post<ApiEnvelope<T>>(path, body, config);
   return res.data.data;
