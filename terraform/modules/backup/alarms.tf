@@ -200,11 +200,11 @@ resource "aws_cloudwatch_dashboard" "backup_observability" {
         width  = 12
         height = 6
         properties = {
-          title   = "Backup failure count"
-          view    = "timeSeries"
-          region  = data.aws_region.current.region
-          stat    = "Sum"
-          period  = 300
+          title  = "Backup failure count"
+          view   = "timeSeries"
+          region = data.aws_region.current.region
+          stat   = "Sum"
+          period = 300
           metrics = [
             [aws_cloudwatch_log_metric_filter.backup_failures[0].metric_transformation[0].namespace, aws_cloudwatch_log_metric_filter.backup_failures[0].metric_transformation[0].name],
           ]

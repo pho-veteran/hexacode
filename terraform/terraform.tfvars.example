@@ -1,16 +1,83 @@
 region                 = "us-west-2"
-environment            = "prod"
+environment            = "dev"
 cidr_block             = "10.20.0.0/16"
 availability_zones     = ["a", "b"]
-db_instance_class      = "db.r6g.large"
-db_multi_az            = true
-db_allocated_storage   = 200
+management_vpc_enabled = false
+db_instance_class      = "db.t4g.medium"
+db_multi_az            = false
+db_allocated_storage   = 50
 application_secret_arn = ""
-ecr_repository_name    = "prod/hexacode"
-image_tag              = "1"
-chat_lambda_arn        = "arn:aws:lambda:us-west-2:123456789012:function:hexacode-prod-chat"
-frontend_domain        = "https://your-cloudfront-domain.example"
+ecr_repository_name    = "dev/hexacode"
+image_tag              = "latest"
+chat_lambda_arn        = ""
+frontend_domain        = "[REDACTED]"
 kms_key_arn            = ""
+
+# =============================================================================
+# ECS Scheduled Scaling — scale down to zero off-hours for dev cost saving
+# =============================================================================
+ecs_scheduled_scaling_actions = {
+  scale_down_evening = {
+    service_key  = "identity"
+    schedule     = "cron(0 18 * * ? *)"
+    timezone     = "Asia/Ho_Chi_Minh"
+    min_capacity = 0
+    max_capacity = 0
+  }
+  scale_up_morning = {
+    service_key  = "identity"
+    schedule     = "cron(0 8 * * ? *)"
+    timezone     = "Asia/Ho_Chi_Minh"
+    min_capacity = 1
+    max_capacity = 2
+  }
+}
+
+# =============================================================================
+# Cost Controls — baseline-driven auto-computation
+# Required: alert_email + the 4 external IAM resource names (must be pre-created)
+# Optional: all budget/threshold values auto-compute from baselines
+#
+# Baseline defaults for dev (lighter than prod):
+#   ECS Fargate   ~$3.00/day
+#   RDS           ~$2.50/day
+#   ElastiCache   ~$1.00/day
+#   NAT/WAF/Other ~$2.50/day
+#   Total         ~$9.00/day  →  monthly ~$275
+#
+# Override any field in cost_controls to fine-tune for your environment.
+# =============================================================================
+cost_controls = {
+  # Required fields
+  alert_email              = "you@[REDACTED]"
+  lambda_role_name         = "your-dev-cost-guard-lambda-role"
+  lambda_basic_policy_arn  = "arn:aws:iam::123456789012:policy/service-role/your-dev-basic-policy"
+  scheduler_role_name      = "your-dev-scheduler-role"
+  scheduler_policy_arn     = "arn:aws:iam::123456789012:policy/service-role/your-dev-scheduler-policy"
+
+  # Optional — uncomment and adjust to override auto-computed values
+  # budget_daily_limit_usd   = 15
+  # budget_monthly_limit_usd = 460
+  # baseline_ecs_fargate_daily_usd    = 3.00
+  # baseline_rds_daily_usd            = 2.50
+  # baseline_elasticache_daily_usd    = 1.00
+  # baseline_nat_gateway_daily_usd   = 0.50
+  # baseline_alb_daily_usd          = 0.30
+  # baseline_other_services_daily_usd = 2.00
+  # anomaly_threshold_usd = 3
+
+  # ECS cluster scoping — replace with your dev cluster name
+  # ecs_cluster_name = "hexacode-dev"
+  # ecs_cost_guard_protection_tag_key = "CostGuard:Protected"
+  # ecs_cost_guard_protection_tag_value = "true"
+
+  # Scheduler
+  # schedule_expression = "cron(0 9 * * ? *)"
+  # schedule_timezone   = "Asia/Ho_Chi_Minh"
+
+  # KMS for SNS encryption (optional)
+  # kms_key_arn = "arn:aws:kms:us-west-2:123456789012:key/your-key-id"
+}
 
 client_vpn_enabled                    = false
 client_vpn_cidr_block                 = "10.30.0.0/22"

@@ -493,7 +493,7 @@ output "worker_service_name" {
 
 output "cost_controls_budget_name" {
   description = "Name of the Terraform-managed daily AWS Budget"
-  value       = module.cost_controls.budget_name
+  value       = module.cost_controls.budget_daily_name
 }
 
 output "cost_controls_sns_topic_arn" {

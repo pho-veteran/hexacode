@@ -34,6 +34,12 @@ resource "aws_ecs_task_definition" "identity_service" {
   execution_role_arn       = var.ecs_execution_role_arn
   task_role_arn            = var.identity_task_role_arn
 
+  tags = {
+    Project     = "hexacode"
+    Environment = local.environment
+    Service     = "identity"
+  }
+
   runtime_platform {
     operating_system_family = "LINUX"
     cpu_architecture        = "X86_64"
@@ -126,7 +132,11 @@ resource "aws_ecs_service" "identity_service" {
   depends_on = [aws_ecs_task_definition.identity_service]
 
   tags = {
-    Name = "hexacode-${local.environment}-identity-service"
+    Name        = "hexacode-${local.environment}-identity-service"
+    Project     = "hexacode"
+    Environment = local.environment
+    Service     = "identity"
+    Protected   = "true" # Prevents cost guard Lambda from scaling to zero
   }
 }
 
@@ -142,6 +152,12 @@ resource "aws_ecs_task_definition" "problem_service" {
   memory                   = local.task_memory.problem
   execution_role_arn       = var.ecs_execution_role_arn
   task_role_arn            = var.problem_task_role_arn
+
+  tags = {
+    Project     = "hexacode"
+    Environment = local.environment
+    Service     = "problem"
+  }
 
   runtime_platform {
     operating_system_family = "LINUX"
@@ -263,7 +279,11 @@ resource "aws_ecs_service" "problem_service" {
   depends_on = [aws_ecs_task_definition.problem_service]
 
   tags = {
-    Name = "hexacode-${local.environment}-problem-service"
+    Name        = "hexacode-${local.environment}-problem-service"
+    Project     = "hexacode"
+    Environment = local.environment
+    Service     = "problem"
+    Protected   = "true"
   }
 }
 
@@ -279,6 +299,12 @@ resource "aws_ecs_task_definition" "submission_service" {
   memory                   = local.task_memory.submission
   execution_role_arn       = var.ecs_execution_role_arn
   task_role_arn            = var.submission_task_role_arn
+
+  tags = {
+    Project     = "hexacode"
+    Environment = local.environment
+    Service     = "submission"
+  }
 
   runtime_platform {
     operating_system_family = "LINUX"
@@ -432,7 +458,11 @@ resource "aws_ecs_service" "submission_service" {
   depends_on = [aws_ecs_task_definition.submission_service]
 
   tags = {
-    Name = "hexacode-${local.environment}-submission-service"
+    Name        = "hexacode-${local.environment}-submission-service"
+    Project     = "hexacode"
+    Environment = local.environment
+    Service     = "submission"
+    Protected   = "true"
   }
 }
 
@@ -448,6 +478,12 @@ resource "aws_ecs_task_definition" "worker" {
   memory                   = local.task_memory.worker
   execution_role_arn       = var.ecs_execution_role_arn
   task_role_arn            = var.worker_task_role_arn
+
+  tags = {
+    Project     = "hexacode"
+    Environment = local.environment
+    Service     = "worker"
+  }
 
   runtime_platform {
     operating_system_family = "LINUX"
@@ -579,6 +615,10 @@ resource "aws_ecs_service" "worker" {
   depends_on = [aws_ecs_task_definition.worker]
 
   tags = {
-    Name = "hexacode-${local.environment}-worker"
+    Name        = "hexacode-${local.environment}-worker"
+    Project     = "hexacode"
+    Environment = local.environment
+    Service     = "worker"
+    Protected   = "true"
   }
 }

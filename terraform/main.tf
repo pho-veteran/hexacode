@@ -280,23 +280,52 @@ module "cloudfront" {
 module "cost_controls" {
   source = "./modules/cost-controls"
 
-  environment               = var.environment
-  region                    = var.region
-  budget_name               = var.cost_controls.budget_name
-  budget_limit_amount_usd   = var.cost_controls.budget_limit_amount_usd
-  alert_email               = var.cost_controls.alert_email
-  sns_topic_name            = var.cost_controls.sns_topic_name
-  lambda_name               = var.cost_controls.lambda_name
-  lambda_role_name          = var.cost_controls.lambda_role_name
-  lambda_basic_policy_arn   = var.cost_controls.lambda_basic_policy_arn
-  schedule_name             = var.cost_controls.schedule_name
-  scheduler_role_name       = var.cost_controls.scheduler_role_name
-  scheduler_policy_arn      = var.cost_controls.scheduler_policy_arn
-  schedule_expression       = var.cost_controls.schedule_expression
-  schedule_timezone         = var.cost_controls.schedule_timezone
-  anomaly_monitor_name      = var.cost_controls.anomaly_monitor_name
-  anomaly_subscription_name = var.cost_controls.anomaly_subscription_name
-  anomaly_threshold_usd     = var.cost_controls.anomaly_threshold_usd
+  environment = var.environment
+  region      = var.region
+
+  # Required notification channel
+  alert_email             = var.cost_controls.alert_email
+  lambda_role_name        = var.cost_controls.lambda_role_name
+  lambda_basic_policy_arn = var.cost_controls.lambda_basic_policy_arn
+  scheduler_role_name     = var.cost_controls.scheduler_role_name
+  scheduler_policy_arn    = var.cost_controls.scheduler_policy_arn
+
+  # Optional budget baseline overrides
+  baseline_ecs_fargate_daily_usd    = try(var.cost_controls.baseline_ecs_fargate_daily_usd, null)
+  baseline_rds_daily_usd            = try(var.cost_controls.baseline_rds_daily_usd, null)
+  baseline_elasticache_daily_usd    = try(var.cost_controls.baseline_elasticache_daily_usd, null)
+  baseline_nat_gateway_daily_usd    = try(var.cost_controls.baseline_nat_gateway_daily_usd, null)
+  baseline_alb_daily_usd            = try(var.cost_controls.baseline_alb_daily_usd, null)
+  baseline_other_services_daily_usd = try(var.cost_controls.baseline_other_services_daily_usd, null)
+
+  # Optional budget limit overrides
+  budget_daily_limit_usd   = try(var.cost_controls.budget_daily_limit_usd, null)
+  budget_monthly_limit_usd = try(var.cost_controls.budget_monthly_limit_usd, null)
+
+  # Optional alert threshold overrides
+  budget_daily_warning_pct   = try(var.cost_controls.budget_daily_warning_pct, null)
+  budget_daily_critical_pct  = try(var.cost_controls.budget_daily_critical_pct, null)
+  budget_monthly_warning_pct = try(var.cost_controls.budget_monthly_warning_pct, null)
+  anomaly_threshold_usd      = try(var.cost_controls.anomaly_threshold_usd, null)
+
+  # Optional ECS cluster scoping
+  ecs_cluster_name                    = try(var.cost_controls.ecs_cluster_name, null)
+  ecs_cost_guard_protection_tag_key   = try(var.cost_controls.ecs_cost_guard_protection_tag_key, null)
+  ecs_cost_guard_protection_tag_value = try(var.cost_controls.ecs_cost_guard_protection_tag_value, null)
+
+  # Optional Lambda settings
+  lambda_timeout_seconds = try(var.cost_controls.lambda_timeout_seconds, null)
+  lambda_memory_mb       = try(var.cost_controls.lambda_memory_mb, null)
+
+  # Optional scheduler settings
+  schedule_expression = try(var.cost_controls.schedule_expression, null)
+  schedule_timezone   = try(var.cost_controls.schedule_timezone, null)
+
+  # Optional KMS
+  kms_key_arn = try(var.cost_controls.kms_key_arn, null)
+
+  # Default tags from root provider
+  tags = var.cost_controls
 }
 
 module "ecs_services" {

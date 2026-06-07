@@ -200,22 +200,53 @@ variable "ecs_scheduled_scaling_actions" {
 }
 
 variable "cost_controls" {
-  description = "Live cost-governance controls that should be codified in Terraform."
+  description = <<-EOT
+    Cost governance controls. Most fields auto-compute from environment name or baseline formulas
+    when left null/empty. Only `alert_email` is always required.
+  EOT
   type = object({
-    budget_name               = string
-    budget_limit_amount_usd   = number
-    alert_email               = string
-    sns_topic_name            = string
-    lambda_name               = string
-    lambda_role_name          = string
-    lambda_basic_policy_arn   = string
-    schedule_name             = string
-    scheduler_role_name       = string
-    scheduler_policy_arn      = string
-    schedule_expression       = string
-    schedule_timezone         = string
-    anomaly_monitor_name      = string
-    anomaly_subscription_name = string
-    anomaly_threshold_usd     = number
+    # --- Notification channels (required) ---
+    alert_email = string
+
+    # --- Lambda IAM — still required, must be pre-created externally ---
+    lambda_role_name        = string
+    lambda_basic_policy_arn = string
+    scheduler_role_name     = string
+    scheduler_policy_arn    = string
+
+    # --- Budget overrides (optional — module auto-computes from baselines) ---
+    budget_name              = string
+    budget_daily_limit_usd   = optional(number)
+    budget_monthly_limit_usd = optional(number)
+
+    # --- Baseline override (optional — module sums them) ---
+    baseline_ecs_fargate_daily_usd    = optional(number)
+    baseline_rds_daily_usd            = optional(number)
+    baseline_elasticache_daily_usd    = optional(number)
+    baseline_nat_gateway_daily_usd    = optional(number)
+    baseline_alb_daily_usd            = optional(number)
+    baseline_other_services_daily_usd = optional(number)
+
+    # --- Alert thresholds ---
+    budget_daily_warning_pct   = optional(number)
+    budget_daily_critical_pct  = optional(number)
+    budget_monthly_warning_pct = optional(number)
+    anomaly_threshold_usd      = optional(number)
+
+    # --- ECS cluster scoping ---
+    ecs_cluster_name                    = optional(string)
+    ecs_cost_guard_protection_tag_key   = optional(string)
+    ecs_cost_guard_protection_tag_value = optional(string)
+
+    # --- Lambda settings ---
+    lambda_timeout_seconds = optional(number)
+    lambda_memory_mb       = optional(number)
+
+    # --- Scheduler ---
+    schedule_expression = optional(string)
+    schedule_timezone   = optional(string)
+
+    # --- KMS ---
+    kms_key_arn = optional(string)
   })
 }
