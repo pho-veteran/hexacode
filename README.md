@@ -1,301 +1,163 @@
 # Hexacode
 
-Hexacode is an online coding judge platform with a React frontend, a FastAPI microservice backend, PostgreSQL, MinIO, Redis, and an SQS-compatible judge queue.
+Cloud-native online coding judge platform. Containerized microservices on AWS Fargate with RDS PostgreSQL, ElastiCache Redis, SQS, S3, API Gateway, CloudFront, Cognito, Bedrock, and full Terraform IaC.
+
+## Architecture
+
+```
+CloudFront ──┬── S3 (SPA)
+             │
+         API Gateway ──┬── VPC Link ── ALB ──┬── identity-service (Fargate)
+                       │                      ├── problem-service (Fargate)
+                       │                      └── submission-service (Fargate)
+                       │
+                       └── /api/chat ── Lambda ── Bedrock Agent + Knowledge Base
+
+SQS ◀── submission-service ──▶ worker (Fargate)
+               │                       │
+               └──── RDS Proxy ── RDS PostgreSQL ────┐
+               └──── ElastiCache Redis               │
+               └──── S3 (problem assets)             │
+               └──── EFS (shared NFS)                │
+                     worker ──── S3 (submissions) ────┘
+```
+
+Six containerized services run on ECS Fargate across private subnets. Three API services (identity, problem, submission) sit behind an internal ALB and are exposed via API Gateway HTTP API + VPC Link. The judge worker polls SQS independently with no public endpoint. Every service maps to an AWS-native equivalent during local development.
+
+## AWS Services
+
+| Category | Service | Use |
+|---|---|---|
+| Compute | ECS Fargate, Lambda | Microservices, chat handler, CORS preflight |
+| Storage | S3 (3 buckets), EFS | SPA hosting, problem assets, submission artifacts, shared NFS |
+| Database | RDS PostgreSQL 16, RDS Proxy, ElastiCache Redis 7 | Relational store, connection pooling, cache |
+| Networking | VPC (private/public/data/firewall), ALB, API Gateway HTTP API, VPC Link, NAT Gateway, Network Firewall, Client VPN, VPC Peering | Isolated multi-tier network, ingress routing, egress inspection |
+| Auth | Cognito User Pool | JWT issuance and validation |
+| AI | Bedrock Agent + Knowledge Base, OpenSearch Serverless | Problem-assistant chat |
+| Queue | SQS + DLQ | Async judge job delivery |
+| CDN | CloudFront with S3 OAC | Global SPA distribution |
+| Security | WAF (CloudFront + regional), Security Groups, IAM least-privilege per task role, Secrets Manager, KMS | Perimeter defense, service isolation, credential management |
+| Observability | CloudWatch Logs, VPC Flow Logs, AWS Backup, Cost Anomaly Detection | Monitoring, auditing, backup, cost governance |
+
+## Infrastructure as Code
+
+Full AWS infrastructure defined in **Terraform** (23 modules, 150+ files). Provisioned via `terraform apply` with:
+- Separate dev/prod workspaces with isolated state backends and VPC CIDRs
+- Rolling ECS deployments with circuit breaker (min 100%, max 200%)
+- Least-privilege IAM per service (identity role has zero AWS API permissions)
+- Automated Secrets Manager rotation for `DATABASE_URL` and `REDIS_URL`
+- RDS Proxy for connection pooling with automatic failover
+- Network Firewall egress inspection on all private routes
+- Dev environment scales to zero outside business hours
+
+### Terraform modules
+
+`vpc`, `security-groups`, `s3-buckets`, `sqs`, `ecr`, `rds`, `rds-proxy`, `elasticache`, `efs`, `iam`, `ecs-cluster`, `ecs-services`, `alb`, `api-gateway`, `cognito`, `cors-lambda`, `bedrock-chat`, `waf`, `network-firewall`, `cloudfront`, `management-vpc`, `client-vpn`, `backup`, `cost-controls`
+
+### Deployment workflow
+
+```sh
+# 1. Provision or update infrastructure
+terraform init -backend-config=backend-prod.hcl
+terraform apply -var-file=terraform.tfvars
+
+# 2. Build and push container images
+./scripts/push-ecr.ps1 -Environment prod -Services all
+
+# 3. Update image tag in tfvars, apply again → rolling ECS update
+
+# 4. Deploy frontend to S3 + invalidate CloudFront
+aws s3 sync hexacode-frontend/dist/ s3://hexacode-prod-frontend/
+aws cloudfront create-invalidation --distribution-id <id> --paths "/*"
+```
 
 ## Repository Layout
 
-- `hexacode-frontend/` active frontend
-- `hexacode-backend/` backend services, shared backend code, contracts, and schema
-- `data/problems/` curated problem catalog used for fresh imports
-- `hexacode-backend/scripts/` backend utility scripts, including catalog import
-- `docs/plan.md` high-level app architecture
-- `docs/cloud-deployment.md` future cloud deployment shape
-
-## Local Requirements
-
-- Node.js 20+
-- Python 3.12+
-- Docker Desktop with Compose
-
-## Installation
-
-Frontend:
-
-```powershell
-npm --prefix hexacode-frontend install
+```
+terraform/                  # Full AWS IaC (23 modules)
+docs/
+  aws.md                    # Architecture reference
+  aws-production-operator-guide.md  # Production runbook
+  ecr.md                    # ECR push guide
+hexacode-frontend/          # React SPA (Vite + React)
+hexacode-backend/
+  services/
+    api-gateway/            # Public API entrypoint (FastAPI)
+    identity-service/       # User + role management
+    problem-service/        # Problem catalog + authoring
+    submission-service/     # Submission intake + judge dispatch
+    worker/                 # Queue consumer, compiles/executes code
+    chat-lambda/            # Bedrock Agent Runtime handler
+  db/new-app-schema.sql     # Authoritative PostgreSQL schema
+  scripts/                  # Catalog import, ECR push utilities
+data/problems/              # Curated problem catalog (seed data)
 ```
 
-Backend local Python usage is optional if you use Docker for services. If you want to run backend scripts from the host, create a virtual environment and install the service dependencies you need from `hexacode-backend/services/*/pyproject.toml`.
+## Local Development
 
-## Start The Local Stack
+Docker Compose provides local equivalents of every AWS service:
+
+| AWS | Local | Port |
+|---|---|---|
+| S3 | MinIO | 19000 (API), 19001 (console) |
+| SQS | ElasticMQ | 19324 |
+| RDS PostgreSQL | PostgreSQL 16 Alpine | 15432 |
+| ElastiCache Redis | Redis 7 Alpine | 16379 |
+
+Adapter pattern: services switch between local and cloud via environment variables (`S3_ENDPOINT`, `SQS_ENDPOINT`). In AWS these are unset so boto3 uses native endpoints; locally they point to MinIO and ElasticMQ.
 
 ```powershell
 docker compose -f docker-compose.local.yml up -d --build
 ```
 
-Main local endpoints:
+| Endpoint | URL |
+|---|---|
+| Frontend | http://127.0.0.1:3000 |
+| Gateway | http://127.0.0.1:8080 |
+| Gateway API docs | http://127.0.0.1:8080/docs |
 
-- Frontend: `http://127.0.0.1:3000`
-- Gateway: `http://127.0.0.1:8080`
-- Gateway docs: `http://127.0.0.1:8080/docs`
+## Schema Design
 
-Local service ports from Compose:
+Four PostgreSQL schemas with clear ownership boundaries:
 
-- `frontend` -> `3000`
-- `gateway` -> `8080`
-- `identity-service` -> `8003`
-- `problem-service` -> `8001`
-- `submission-service` -> `8002`
-- `postgres` -> `15432`
-- `minio api` -> `19000`
-- `minio console` -> `19001`
-- `redis` -> `16379`
-- `elasticmq` -> `19324`
+- `app_identity` — users (Cognito-backed), roles, permissions, audit log
+- `problem` — problems, tags, testsets, testcases, checkers
+- `submission` — runtimes, submissions, judge jobs, results
+- `storage` — object metadata shared across services
 
-## Architecture Summary
+All tables enforce `created_at` / `updated_at` timestamps via trigger. Status columns use `CHECK` constraints. Foreign keys reference by UUID. Schema bootstrap is idempotent (`IF NOT EXISTS` throughout).
 
-- `frontend`
-  - Vite + React application
-  - talks only to the gateway
-  - handles Cognito sign-in in the browser
-- `gateway`
-  - single public API entrypoint
-  - routes requests to backend services
-  - keeps the frontend isolated from internal service URLs
-- `identity-service`
-  - local user bootstrap into `app_identity.users`
-  - role and permission management
-  - `/api/auth/me` and dashboard user administration
-  - audit logging for role/user changes
-- `problem-service`
-  - public problem catalog and problem detail APIs
-  - dashboard authoring flows for problems, tags, testsets, and checker metadata
-  - catalog import target for `data/problems`
-- `submission-service`
-  - runtime profiles, submission creation, judge job dispatch, results, and submission history
-- `chat-lambda`
-  - AWS Lambda handler for Bedrock-backed chat
-  - intended to sit behind API Gateway in cloud
-- `worker`
-  - consumes queued judge jobs
-  - compiles code and executes sample runs or full submissions
+## Auth Model
 
-Shared infrastructure:
+- **Cognito** handles browser sign-in and JWT issuance
+- Backend services validate Cognito JWTs via JWKS (verify issuer, audience, client ID)
+- Local authorization is role-based in PostgreSQL (`app_identity.user_role_assignments`)
+- Roles are independent of Cognito groups — managed entirely in the application database
+- API Gateway enforces Cognito JWT authorizer on chat routes; internal services validate tokens independently
 
-- PostgreSQL
-  - primary relational database
-  - stores users, roles, problems, tags, testsets, testcases, submissions, judge jobs, results, and storage metadata
-- MinIO
-  - S3-compatible object storage
-  - stores statement files, testcase archives, testcase input/output files, checker source/binaries, and submission artifacts
-- Redis
-  - cache layer only
-  - currently used for fast-read data such as public problem catalog responses and cache-version invalidation
-  - Redis can be wiped without losing source-of-truth data because Postgres and MinIO remain authoritative
-- ElasticMQ
-  - local SQS-compatible queue emulator
-  - used by `submission-service` and `worker` for judge-job delivery in local development
+## Security
+
+- All ECS tasks in private subnets — no public IPs, no direct internet access
+- API Gateway → VPC Link → internal ALB: no public-facing load balancer
+- Per-service IAM task roles with resource-scoped S3, SQS, and KMS policies
+- WAF on both CloudFront (frontend) and regional (ALB) with rate limiting and OWASP rules
+- Network Firewall for egress traffic inspection on all private subnets
+- VPC Flow Logs shipped to CloudWatch; Secrets Manager for runtime credentials
+- Worker sandbox (untrusted code execution) is the highest-risk surface — runs as unprivileged subprocess with resource limits
+
+## Observability & Operations
+
+- CloudWatch Log Groups per ECS service, Lambda function, and VPC Flow Logs
+- RDS Performance Insights for query profiling
+- AWS Backup daily plan covering RDS, EFS, and S3 problem bucket
+- Cost Anomaly Detection + budget alerts via SNS
+- Scheduled ECS cost guard (dev only): shuts down services when budget threshold is breached
 
 ## Fresh Database Setup
 
-In this repository, "fresh database setup" means:
-
-1. create a brand new local Postgres data volume
-2. let the services bootstrap the schema from `hexacode-backend/db/new-app-schema.sql`
-3. import the curated problem catalog from the root `data/problems/` folder
-
-This is a full local reset. It removes existing Postgres data and MinIO object data.
-
-The services bootstrap the shared schema from `hexacode-backend/db/new-app-schema.sql` on startup.
-
-For a clean local reset:
-
-1. Stop the stack
-
-```powershell
-docker compose -f docker-compose.local.yml down
-```
-
-2. Remove persisted local database and object-storage volumes
-
-```powershell
-docker volume rm hexacode-backend_postgres-data hexacode-backend_minio-data
-```
-
-3. Start the stack again so the empty database is recreated and schema bootstrap runs
-
-```powershell
-docker compose -f docker-compose.local.yml up -d --build
-```
-
-This recreates:
-
-- a new `hexacode` Postgres database
-- all schemas and tables from `new-app-schema.sql`
-- MinIO buckets required by the backend
-- Redis and ElasticMQ dependencies
-
-At this point the database is structurally ready, but it does not yet contain your curated problem catalog.
-
-## Database Migrations
-
-If upgrading an existing database (not a fresh reset), apply migrations in order:
-
-```powershell
-Get-Content hexacode-backend/db/migrations/001_add_indexes.sql | docker compose -f docker-compose.local.yml exec -T postgres psql -U hexacode -d hexacode
-Get-Content hexacode-backend/db/migrations/002_audit_log.sql | docker compose -f docker-compose.local.yml exec -T postgres psql -U hexacode -d hexacode
-Get-Content hexacode-backend/db/migrations/003_problem_version.sql | docker compose -f docker-compose.local.yml exec -T postgres psql -U hexacode -d hexacode
-Get-Content hexacode-backend/db/migrations/004_rejection_reason.sql | docker compose -f docker-compose.local.yml exec -T postgres psql -U hexacode -d hexacode
-```
-
-All migrations use `IF NOT EXISTS` / `IF NOT EXISTS` and are safe to re-run.
-
-## Fresh Problem Data Import
-
-The curated catalog lives in the root `data/problems/` folder.
-
-Important detail: the local Compose file mounts that folder into `problem-service` as:
-
-- host: `./data`
-- container: `/workspace/data`
-
-So the import command reads from `/workspace/data/problems` inside the container, which is the same content as the root `data/problems/` folder in this repo.
-
-To load the curated catalog into the fresh database:
-
-```powershell
-docker compose -f docker-compose.local.yml exec -T problem-service python scripts/import_problem_catalog.py --catalog-dir /workspace/data/problems --skip-env-file --reset-existing
-```
-
-What this does:
-
-- bootstraps schema/buckets if needed unless explicitly skipped
-- reads `data/problems/catalog.json`
-- reads each problem statement and testcase directory under `data/problems/`
-- uploads statement assets and testcase archives to MinIO
-- writes tags, problems, testsets, testcases, and checker metadata into PostgreSQL
-- when `--reset-existing` is used, clears existing imported catalog data first
-
-After import, the local stack should have:
-
-- real problems available in the public catalog
-- testcase assets present in MinIO
-- problem metadata and ownership rows in Postgres
-
-Recommended full fresh-start sequence:
-
 ```powershell
 docker compose -f docker-compose.local.yml down
 docker volume rm hexacode-backend_postgres-data hexacode-backend_minio-data
 docker compose -f docker-compose.local.yml up -d --build
 docker compose -f docker-compose.local.yml exec -T problem-service python scripts/import_problem_catalog.py --catalog-dir /workspace/data/problems --skip-env-file --reset-existing
 ```
-
-## Runtime Data Notes
-
-What survives in each local dependency:
-
-- Postgres volume
-  - users, roles, problems, submissions, judge records
-- MinIO volume
-  - uploaded objects and testcase archives
-- Redis
-  - only cache data, safe to flush
-- ElasticMQ
-  - queue state for local judge jobs
-
-If you want a truly fresh local environment, reset Postgres and MinIO first, then rerun the catalog import.
-
-## Useful Commands
-
-Frontend build:
-
-```powershell
-npm --prefix hexacode-frontend run build
-```
-
-Frontend lint:
-
-```powershell
-npm --prefix hexacode-frontend run lint
-```
-
-Check local service status:
-
-```powershell
-docker compose -f docker-compose.local.yml ps
-```
-
-Re-import the catalog without recreating volumes:
-
-```powershell
-docker compose -f docker-compose.local.yml exec -T problem-service python scripts/import_problem_catalog.py --catalog-dir /workspace/data/problems --skip-env-file --reset-existing
-```
-
-Grant the local `admin` role to a specific username:
-
-Replace `<username>` with the value stored in `app_identity.users.username`.
-The user must already exist locally, which normally happens after that user signs in once.
-
-```powershell
-docker compose -f docker-compose.local.yml exec -T postgres psql -U hexacode -d hexacode -c "insert into app_identity.user_role_assignments (user_id, role_code) select id, 'admin' from app_identity.users where username = '<username>' on conflict (user_id, role_code) do nothing;"
-```
-
-If you are already inside the `identity-service` container, or inside the same image running on ECS/Fargate, use Python instead of `psql`:
-
-```sh
-python - <<'PY'
-import os
-import sys
-import psycopg
-
-username = "<username>"
-
-with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
-    with conn.cursor() as cur:
-        cur.execute(
-            "select id from app_identity.users where username = %s",
-            (username,),
-        )
-        row = cur.fetchone()
-        if row is None:
-            sys.exit(f"user not found: {username}")
-
-        cur.execute(
-            """
-            insert into app_identity.user_role_assignments (user_id, role_code)
-            values (%s, 'admin')
-            on conflict (user_id, role_code) do nothing
-            """,
-            (row[0],),
-        )
-        conn.commit()
-        print("granted admin role" if cur.rowcount else "admin role already present")
-PY
-```
-
-Check which roles a local username currently has:
-
-```powershell
-docker compose -f docker-compose.local.yml exec -T postgres psql -U hexacode -d hexacode -c "select u.username, coalesce(array_agg(a.role_code order by a.role_code) filter (where a.role_code is not null), '{}') as roles from app_identity.users u left join app_identity.user_role_assignments a on a.user_id = u.id where u.username = '<username>' group by u.username;"
-```
-
-Open the MinIO console:
-
-- `http://127.0.0.1:19001`
-- default local credentials from Compose:
-  - username: `minioadmin`
-  - password: `minioadmin`
-
-## Current Auth Model
-
-- Cognito handles sign-in and token issuance
-- app authorization is role/capability based in the local database
-- user rows are created locally in `app_identity.users` after authenticated access
-- role assignments live in Postgres and are independent from raw Cognito groups
-
-## Deployment Direction
-
-Local development uses Docker Compose.
-
-Future cloud deployment targets are documented in `docs/cloud-deployment.md`.
